@@ -26,7 +26,7 @@ from proplanOrchestrator import (
     FindLeadsSchema, GenerateCopySchema, SearchKnowledgeBaseSchema,
     ScheduleTaskSchema, RunWorkflowSchema
 )
-from database import get_database, LeadModel, CampaignModel, RunLogModel, extract_leads_from_memory
+from database import get_database, LeadModel, CampaignModel, AgentSessionModel, extract_leads_from_memory
 from llm import AnthropicPlannerProvider, AnthropicAgentProvider
 
 try:
@@ -136,7 +136,7 @@ def create_orchestrator() -> Orchestrator:
     orchestrator.register_agent(SupportAgent, llm_provider=get_agent_llm(
         "support", "search_knowledge_base"))
     orchestrator.register_agent(OpsAgent, llm_provider=get_agent_llm(
-        "operations", "schedule_task, run_workflow"))
+        "ops", "schedule_task, run_workflow"))
 
     return orchestrator
 
@@ -205,14 +205,16 @@ def agent_run(body: AgentRunRequest):
     for lead in extract_leads_from_memory(result.get("memory", [])):
         db.create_lead(lead)
 
-    db.log_run(RunLogModel(
-        run_id=result["run_id"],
-        action="agent_run",
-        metadata={
-            "user_id": body.user_id,
+    db.log_run(AgentSessionModel(
+        agent_type="orchestrator",
+        status="completed",
+        input_data={"user_id": body.user_id, "request": body.request},
+        output_data={
             "status": result["status"],
-            "total_cost": result["total_cost"]
-        }
+            "total_cost": result["total_cost"],
+            "run_id": result["run_id"]
+        },
+        cost_usd=result["total_cost"],
     ))
 
     return AgentRunResponse(
@@ -283,7 +285,6 @@ def create_campaign(body: CampaignCreateRequest):
         id=str(uuid.uuid4()),
         name=body.name,
         status=body.status,
-        created_at=time.time()
     )
     return db.create_campaign(campaign)
 

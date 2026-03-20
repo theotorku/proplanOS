@@ -257,7 +257,7 @@ class TestFullRun(unittest.TestCase):
 
         response = orchestrator.run("Find leads and generate marketing copy")
 
-        self.assertEqual(response["status"], "completed")
+        self.assertEqual(response["status"], "goal_met")
         self.assertGreater(response["total_cost"], 0)
         self.assertGreater(len(response["memory"]), 0)
 

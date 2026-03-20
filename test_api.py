@@ -31,7 +31,7 @@ class TestAgentRun(unittest.TestCase):
         self.client = TestClient(app)
         db.leads.clear()
         db.campaigns.clear()
-        db.logs.clear()
+        db.sessions.clear()
 
     def test_agent_run_success(self):
         """POST /agent/run should return a completed run with cost info."""
@@ -42,7 +42,7 @@ class TestAgentRun(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
 
         data = res.json()
-        self.assertEqual(data["status"], "completed")
+        self.assertEqual(data["status"], "goal_met")
         self.assertEqual(data["user_id"], "user-1")
         self.assertGreater(data["total_cost"], 0)
         self.assertIsInstance(data["memory"], list)
@@ -71,7 +71,7 @@ class TestLeads(unittest.TestCase):
         self.client = TestClient(app)
         db.leads.clear()
         db.campaigns.clear()
-        db.logs.clear()
+        db.sessions.clear()
 
     def test_list_leads_empty(self):
         """GET /leads should return empty list when no leads exist."""
@@ -112,7 +112,7 @@ class TestCampaigns(unittest.TestCase):
         self.client = TestClient(app)
         db.leads.clear()
         db.campaigns.clear()
-        db.logs.clear()
+        db.sessions.clear()
 
     def test_create_campaign(self):
         """POST /campaigns should create and return a campaign."""
@@ -126,7 +126,6 @@ class TestCampaigns(unittest.TestCase):
         self.assertEqual(data["name"], "Spring Sale")
         self.assertEqual(data["status"], "active")
         self.assertIn("id", data)
-        self.assertIn("created_at", data)
 
     def test_create_campaign_default_status(self):
         """POST /campaigns without status should default to 'draft'."""

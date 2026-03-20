@@ -1,252 +1,256 @@
-# ProPlan Agent Orchestrator
+# ProPlan Agent OS
 
-> A production-grade AI Agent Operating System that enables local businesses to automate sales, marketing, customer service, and operations.
+> An Anthropic-native, multi-agent AI operating system for automating sales, marketing, support, and operations for local businesses.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│                  User Request               │
-└───────────────────┬─────────────────────────┘
-                    ▼
-┌─────────────────────────────────────────────┐
-│              Orchestrator                   │
-│  ┌──────────┐  ┌──────────┐  ┌───────────┐ │
-│  │ Planner  │→ │ Dispatch │→ │ Evaluator │ │
-│  └──────────┘  └──────────┘  └───────────┘ │
-│       ▲              │              │       │
-│       │         ┌────▼────┐         │       │
-│       │         │ Security│         │       │
-│       │         │  Layer  │         │       │
-│       │         └────┬────┘         │       │
-│       └──────────────┼──────────────┘       │
-└──────────────────────┼──────────────────────┘
-                       ▼
-     ┌─────────────────────────────────────┐
-     │          Agent Registry             │
-     │  ┌───────────┐  ┌────────────────┐  │
-     │  │SalesAgent │  │MarketingAgent  │  │
-     │  └─────┬─────┘  └───────┬────────┘  │
-     └────────┼────────────────┼───────────┘
-              ▼                ▼
-     ┌─────────────────────────────────────┐
-     │          Tool Registry              │
-     │  ┌──────────────┐ ┌──────────────┐  │
-     │  │find_leads    │ │generate_copy │  │
-     │  └──────────────┘ └──────────────┘  │
-     └─────────────────────────────────────┘
-              ▼                ▼
-     ┌─────────────────────────────────────┐
-     │     Observability Layer             │
-     │  ┌────────┐  ┌──────────────────┐   │
-     │  │ Logger │  │  Cost Tracker    │   │
-     │  └────────┘  └──────────────────┘   │
-     └─────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                     User Request                        │
+│              (API / Frontend / CLI)                     │
+└────────────────────────┬────────────────────────────────┘
+                         ▼
+┌─────────────────────────────────────────────────────────┐
+│                   Orchestrator                          │
+│  ┌────────────┐  ┌────────────┐  ┌───────────────────┐ │
+│  │  Planner   │→ │  Dispatch  │→ │    Evaluator      │ │
+│  │ (Claude)   │  │            │  │ (all/any success)  │ │
+│  └────────────┘  └─────┬──────┘  └───────────────────┘ │
+│                    ┌────▼─────┐                         │
+│                    │ Security │                         │
+│                    │  Layer   │                         │
+│                    └────┬─────┘                         │
+└─────────────────────────┼───────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│                   Agent Registry                        │
+│  ┌──────────┐ ┌───────────┐ ┌─────────┐ ┌──────────┐  │
+│  │  Sales   │ │ Marketing │ │ Support │ │   Ops    │  │
+│  │  Agent   │ │   Agent   │ │  Agent  │ │  Agent   │  │
+│  └────┬─────┘ └─────┬─────┘ └────┬────┘ └────┬─────┘  │
+└───────┼─────────────┼────────────┼───────────┼─────────┘
+        ▼             ▼            ▼           ▼
+┌─────────────────────────────────────────────────────────┐
+│                   Tool Registry                         │
+│  find_leads │ generate_copy │ search_kb │ schedule │ wf │
+└─────────────────────────┬───────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  Observability    │   Database     │   Cost Tracker     │
+│  (Logger)         │  (Supabase)    │  (per-task $)      │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🚀 Quick Start
+## Tech Stack
 
-### Prerequisites
+| Layer | Technology |
+|-------|-----------|
+| **LLM** | Anthropic Claude (claude-sonnet-4) via `anthropic` SDK |
+| **Backend** | Python 3.10+, FastAPI, Pydantic |
+| **Database** | Supabase (Postgres) with in-memory dev fallback |
+| **Async Queue** | Celery + Redis (optional) |
+| **Frontend** | React 19, TypeScript, Vite, Tailwind CSS |
 
-- Python 3.10+
+---
 
-### Run the Orchestrator
+## Quick Start
+
+### 1. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Configure environment (optional)
+
+```bash
+cp .env.example .env
+# Edit .env with your keys
+```
+
+Without env vars, the system runs in **dev mode**: mock LLMs + in-memory database.
+
+### 3. Run the orchestrator (CLI)
 
 ```bash
 python proplanOrchestrator.py
 ```
 
-This executes the built-in example: the **SalesAgent** finds leads and the **MarketingAgent** generates ad copy.
-
-### Run Tests
-
-```bash
-python -m unittest test_orchestrator -v
-python -m unittest test_api -v
-```
-
-### Run the API Server
+### 4. Run the API server
 
 ```bash
 uvicorn api:app --reload
 ```
 
-The API will be available at `http://localhost:8000`. Interactive docs at `http://localhost:8000/docs`.
+API at `http://localhost:8000` | Docs at `http://localhost:8000/docs`
+
+### 5. Run the frontend
+
+```bash
+cd frontend && npm install && npm run dev
+```
+
+Frontend at `http://localhost:5173`
+
+### 6. Run tests
+
+```bash
+python -m unittest test_orchestrator test_api -v
+```
+
+---
+
+## Project Structure
+
+```
+proplanOS/
+├── proplanOrchestrator.py    # Core engine: agents, tools, security, memory, evaluator
+├── api.py                    # FastAPI HTTP layer (sync + async endpoints)
+├── llm.py                    # Anthropic Claude LLM providers (Planner + Agent)
+├── database.py               # Database abstraction (Supabase + in-memory fallback)
+├── tasks.py                  # Celery background worker for async runs
+├── test_orchestrator.py      # 13 unit tests for the orchestrator
+├── test_api.py               # 11 API endpoint tests
+├── requirements.txt          # Python dependencies
+├── .env.example              # Environment variable template
+├── .gitignore
+│
+├── frontend/                 # React 19 + TypeScript + Vite + Tailwind
+│   ├── src/App.tsx           # Terminal-themed mission control UI
+│   ├── package.json
+│   └── ...
+│
+├── Proplan_Agent_Architecture.md
+├── API_REFERENCE.md
+├── DEVELOPMENT.md
+└── README.md
+```
+
+---
+
+## Agents
+
+| Agent | Name | Default Tool | Purpose |
+|-------|------|-------------|---------|
+| `SalesAgent` | `sales` | `find_leads_tool` | Lead scraping, scoring, outreach |
+| `MarketingAgent` | `marketing` | `generate_copy_tool` | Ad copy, campaign creation |
+| `SupportAgent` | `support` | `search_knowledge_base` | Knowledge retrieval, chat responses |
+| `OpsAgent` | `ops` | `schedule_task` | Scheduling, workflow automation |
+
+## Tools
+
+| Tool | Schema | Cost | Description |
+|------|--------|------|-------------|
+| `find_leads_tool` | `{query: str}` | $0.02 | Returns scored leads |
+| `generate_copy_tool` | `{input: str}` | $0.01 | Generates optimized ad copy |
+| `search_knowledge_base` | `{query: str}` | $0.005 | Searches KB and returns answers |
+| `schedule_task` | `{task_name: str}` | $0.005 | Schedules a task |
+| `run_workflow` | `{workflow_name: str}` | $0.01 | Executes an automated workflow |
+
+---
+
+## API Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/health` | No | Health check |
+| `POST` | `/agent/run` | API Key | Run orchestrator (sync) |
+| `POST` | `/agent/run/async` | API Key | Queue orchestrator run (Celery) |
+| `GET` | `/agent/run/{task_id}` | API Key | Poll async run status |
+| `GET` | `/leads` | API Key | List leads (with `?min_score=` filter) |
+| `POST` | `/campaigns` | API Key | Create a campaign |
+| `GET` | `/campaigns` | API Key | List campaigns |
 
 **Quick smoke test:**
 
 ```bash
-# Health check
 curl http://localhost:8000/health
 
-# Run the orchestrator
 curl -X POST http://localhost:8000/agent/run \
   -H "Content-Type: application/json" \
   -d '{"user_id": "user-1", "request": "Find leads and generate copy"}'
 
-# List leads (auto-stored from agent run)
 curl http://localhost:8000/leads
-
-# Create a campaign
-curl -X POST http://localhost:8000/campaigns \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Spring Sale", "status": "active"}'
 ```
 
 ---
 
-## 📦 Project Structure
+## Environment Variables
 
-```
-Proplan_Operating_System/
-├── proplanOrchestrator.py         # Core orchestrator (agents, tools, security, memory)
-├── api.py                         # FastAPI HTTP layer
-├── test_orchestrator.py           # 13 unit tests for the orchestrator
-├── test_api.py                    # 11 API endpoint tests
-├── Proplan_Agent_Architecture.md  # Full architecture spec
-├── README.md                      # ← You are here
-├── API_REFERENCE.md               # Class & method reference
-└── DEVELOPMENT.md                 # How to extend the system
-```
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ANTHROPIC_API_KEY` | No | Enables real Claude LLM planning. Falls back to mock LLMs. |
+| `SUPABASE_URL` | No | Supabase project URL. Falls back to in-memory DB. |
+| `SUPABASE_KEY` | No | Supabase service key. |
+| `API_SECRET_KEY` | No | Enables `X-API-Key` header auth. Skipped if not set. |
+| `ALLOWED_ORIGINS` | No | CORS origins (comma-separated). Defaults to `http://localhost:5173`. |
+| `REDIS_URL` | No | Redis URL for Celery async queue. Defaults to `redis://localhost:6379/0`. |
 
 ---
 
-## 🧩 Core Concepts
+## Security Layer
 
-### Orchestrator
-
-The central brain. It manages the **plan → dispatch → evaluate** loop:
-
-1. **Plan** — The `LLMPlanner` breaks a user request into a list of `Task` objects.
-2. **Dispatch** — Each task is routed to the correct agent via the `AgentRegistry`.
-3. **Evaluate** — The `Evaluator` checks if the goal was met using the current batch of results.
-4. **Repeat or stop** — If the goal is not met and limits (steps, failures, budget) aren't reached, loop again.
-
-### Agents
-
-Specialized workers that receive tasks and decide which tool to call. Each agent uses an `LLMProvider` to make decisions.
-
-| Agent | Default Tool | Purpose |
-|-------|-------------|---------|
-| `SalesAgent` | `find_leads_tool` | Lead scraping, scoring, outreach |
-| `MarketingAgent` | `generate_copy_tool` | Ad copy, campaign creation |
-
-### Tools
-
-Registered functions that agents can call. Each tool has a name, input schema, a callable function, and a cost estimate.
-
-### Security Layer
-
-Enforces three constraints before any tool execution:
+The `SecurityPolicy` enforces three constraints before every tool execution:
 
 | Check | What It Does |
 |-------|-------------|
 | **Permissions** | `can_use(agent, tool)` — Is this agent allowed to use this tool? |
 | **Rate Limiting** | `check_rate_limit(agent)` — Has this agent exceeded its call quota? |
-| **Budget** | `check_budget()` — Is the total cost still within the budget limit? |
-
-### LLM Providers
-
-A `Protocol`-based abstraction for swapping LLM backends. The system ships with mock providers (`MockAgentLLM`, `MockPlannerLLM`) and can be extended with real providers. The system ships with Anthropic (Claude) as the default LLM provider.
-
----
-
-## 📖 Example Usage
+| **Budget** | `check_budget()` — Is the total cost within the limit? |
 
 ```python
-from proplanOrchestrator import (
-    Orchestrator, Tool, SalesAgent, MarketingAgent,
-    SecurityPolicy, MockAgentLLM
-)
-
-# 1. Create orchestrator (with optional security policy)
-policy = SecurityPolicy(
-    allowed_tools={"sales": ["find_leads_tool"]},
-    rate_limits={"sales": 10},
-    budget_limit=5.0
-)
-orchestrator = Orchestrator(security_policy=policy)
-
-# 2. Register tools
-orchestrator.register_tool(Tool(
-    name="find_leads_tool",
-    schema={"query": str},
-    function=lambda p: [{"name": "Lead A", "score": 90}],
-    cost_estimate=0.02
-))
-
-orchestrator.register_tool(Tool(
-    name="generate_copy_tool",
-    schema={"input": str},
-    function=lambda p: "Optimized ad copy",
-    cost_estimate=0.01
-))
-
-# 3. Register agents (optionally inject custom LLM providers)
-orchestrator.register_agent(SalesAgent)
-orchestrator.register_agent(MarketingAgent)
-
-# 4. Run
-response = orchestrator.run("Find leads and generate marketing copy")
-print(response["status"])        # "completed"
-print(response["total_cost"])    # 0.03
-```
-
----
-
-## 🔒 Security Configuration
-
-```python
-# Restrict which tools each agent can access
 policy = SecurityPolicy(
     allowed_tools={
-        "sales": ["find_leads_tool"],           # sales can only find leads
-        "marketing": ["generate_copy_tool"],    # marketing can only generate copy
+        "sales": ["find_leads_tool"],
+        "marketing": ["generate_copy_tool"],
+        "support": ["search_knowledge_base"],
+        "ops": ["schedule_task", "run_workflow"],
     },
-    rate_limits={
-        "sales": 100,       # max 100 tool calls per run
-        "marketing": 50,    # max 50 tool calls per run
-    },
-    budget_limit=10.0       # halt if total cost exceeds $10
+    rate_limits={"sales": 100, "marketing": 50},
+    budget_limit=10.0
 )
-
 orchestrator = Orchestrator(security_policy=policy)
 ```
 
-Use `SecurityPolicy.allow_all()` for development (no restrictions).
+Use `SecurityPolicy.allow_all()` for development.
 
 ---
 
-## 🧪 Testing
+## LLM Provider (Anthropic Claude)
 
-The test suite covers:
+The system uses a `Protocol`-based `LLMProvider` abstraction. Two Anthropic adapters ship in `llm.py`:
+
+- **`AnthropicPlannerProvider`** — Breaks user requests into multi-agent task plans
+- **`AnthropicAgentProvider`** — Decides which tool to call for a given task
+
+Both default to `claude-sonnet-4-20250514`. Without an `ANTHROPIC_API_KEY`, the system falls back to `MockPlannerLLM` and `MockAgentLLM`.
+
+---
+
+## Testing
 
 | Area | Tests |
 |------|-------|
-| Evaluator logic | 5 tests — all/any success, partial failures, empty batches |
-| Retry loop | 2 tests — records once, succeeds on retry |
-| LLM injection | 2 tests — custom provider, correct defaults per agent |
-| Security | 3 tests — permissions, rate limits, budget |
-| End-to-end | 1 test — full orchestration run |
-| API — Health | 1 test — endpoint returns 200 |
-| API — Agent Run | 3 tests — success, auto-stored leads, validation |
-| API — Leads | 3 tests — list, post-run discovery, min_score filter |
-| API — Campaigns | 4 tests — create, defaults, list, empty list |
+| Evaluator logic | 5 — all/any success, partial failures, empty batches |
+| Retry loop | 2 — records once, succeeds on retry |
+| LLM injection | 2 — custom provider, correct defaults per agent |
+| Security | 3 — permissions, rate limits, budget |
+| End-to-end | 1 — full orchestration run |
+| API Health | 1 |
+| API Agent Run | 3 — success, auto-stored leads, validation |
+| API Leads | 3 — list, post-run discovery, min_score filter |
+| API Campaigns | 4 — create, defaults, list, empty list |
 
 ```bash
-# Run all tests
 python -m unittest test_orchestrator test_api -v
-
-# Run a specific test class
-python -m unittest test_api.TestAgentRun -v
 ```
 
 ---
 
-## 📄 License
+## License
 
 Proprietary — ProPlan Systems.

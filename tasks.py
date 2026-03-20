@@ -61,7 +61,7 @@ def run_orchestrator(self, request: str, user_id: str) -> Dict[str, Any]:
     """
     # Import locally to avoid circular dependencies during worker boot
     from api import create_orchestrator
-    from database import get_database, RunLogModel, extract_leads_from_memory
+    from database import get_database, AgentSessionModel, extract_leads_from_memory
 
     # self.request.id is not always present (e.g. during unit tests without a broker)
     task_id = getattr(self.request, "id", None) or str(uuid.uuid4())
@@ -78,16 +78,18 @@ def run_orchestrator(self, request: str, user_id: str) -> Dict[str, Any]:
     for lead in extract_leads_from_memory(result.get("memory", [])):
         db.create_lead(lead)
 
-    # Store the log to either Supabase or the In-Memory store
-    db.log_run(RunLogModel(
-        run_id=result.get("run_id", task_id),
-        action="agent_run",
-        metadata={
-            "user_id": user_id,
-            "status": result.get("status", "completed"),
+    # Store the session log to either Supabase or the In-Memory store
+    db.log_run(AgentSessionModel(
+        agent_type="orchestrator",
+        status="completed",
+        input_data={"user_id": user_id, "request": request},
+        output_data={
+            "status": result.get("status", "goal_met"),
             "total_cost": result.get("total_cost", 0.0),
+            "run_id": result.get("run_id", task_id),
             "celery_task_id": task_id
-        }
+        },
+        cost_usd=result.get("total_cost", 0.0),
     ))
 
     logging.info("Worker %s finished orchestrator payload.", task_id)
