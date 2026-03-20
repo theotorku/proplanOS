@@ -1,0 +1,270 @@
+# ProplanOS — User Guide
+
+> How to use ProplanOS to automate sales, marketing, support, and operations for your business.
+
+---
+
+## What is ProplanOS?
+
+ProplanOS is an AI-powered command center that runs autonomous agents on your behalf. You describe a business objective in plain English, and ProplanOS breaks it into tasks, assigns them to specialized agents, executes them, and reports back — with full cost tracking and security enforcement.
+
+**Four agents are at your disposal:**
+
+| Agent | What it does | Example tasks |
+|-------|-------------|---------------|
+| **Sales** | Finds and scores leads | "Find 20 B2B leads in Austin TX", "Score leads for ICP fit" |
+| **Marketing** | Generates copy and campaigns | "Write 5 LinkedIn outreach messages", "Create Q2 launch campaign" |
+| **Support** | Searches knowledge and answers questions | "Find our refund policy", "Draft a response to a billing complaint" |
+| **Ops** | Schedules tasks and runs workflows | "Schedule follow-ups for this week", "Run the onboarding workflow" |
+
+You don't choose the agents. The **Planner** reads your request and decides which agents to deploy, in what order, and with what inputs.
+
+---
+
+## Getting Started
+
+### Step 1: Open ProplanOS
+
+Navigate to the ProplanOS dashboard in your browser. You'll see the **Mission Control** interface — a terminal-themed command center.
+
+The header shows:
+- **SYSTEM ONLINE** — the backend is connected
+- **4 AGENTS ACTIVE** — all agents are registered and ready
+
+The sidebar shows:
+- System status
+- Agent registry (Sales, Marketing, Support, Ops)
+- Run stats (after your first mission)
+
+### Step 2: Run Your First Mission
+
+At the bottom of the screen, you'll see the command bar:
+
+```
+[MISSION]> Describe your mission objective...
+```
+
+Type a request in plain English. Be specific about what you want:
+
+**Good examples:**
+- "Find 20 verified B2B leads in SaaS and score each for ICP fit"
+- "Generate 5 LinkedIn outreach messages for cold pipeline activation"
+- "Run a full ops review and schedule follow-up tasks for the week"
+- "Create a multi-touch marketing campaign for Q2 product launch"
+
+**Less effective:**
+- "Do stuff" (too vague — the planner can't generate a useful task graph)
+- "Help" (no actionable objective)
+
+Click **DEPLOY** or press **Enter** to launch the mission.
+
+### Step 3: Watch the Execution
+
+Once deployed, you'll see:
+1. **Processing log** — Real-time status: "Initializing secure agent environment...", "Planner LLM generating task graph...", "Security layer: permissions validated..."
+2. **Mission complete** — Each task shown with its agent, payload, output, and success/failure status
+3. **Cost breakdown** — Per-task cost visualization with bar chart
+
+### Step 4: Review Results
+
+Each completed task shows:
+
+```
+01  SALES-01  EXECUTE  ✓ OK
+    PAYLOAD: {"query": "find leads"}
+    OUTPUT:  [{"name": "Lead A", "score": 90}]
+```
+
+- **Agent badge** — Which agent handled it (color-coded)
+- **Status** — ✓ OK or ✗ FAIL
+- **Retries** — If the task failed and was retried (up to 2 retries)
+- **Payload** — What was sent to the tool
+- **Output** — What the tool returned
+
+At the bottom, the **Cost Breakdown** shows how much each task cost and the total run cost.
+
+---
+
+## Three Views
+
+Use the tabs in the header to switch between views:
+
+### Mission (default)
+
+The main command interface. Run missions, see results, track costs.
+
+**Mission templates** are shown when no mission is running — click any template to pre-fill the command bar with a ready-to-deploy objective.
+
+### Leads
+
+A database table of all leads discovered by agent runs.
+
+| Column | What it shows |
+|--------|--------------|
+| NAME | Lead name |
+| SCORE | ICP fit score (0-100) |
+| FIT | HIGH (70+), MID (40-69), LOW (0-39) |
+| SOURCE | Where the lead came from (agent, manual) |
+| ID | Unique lead identifier |
+
+**Filtering:** Use the MIN SCORE dropdown to filter leads by quality:
+- ALL — show everything
+- 40+ — mid-tier and above
+- 70+ — high-value leads only
+- 90+ — top-tier leads
+
+**Refresh:** Click the REFRESH button to pull the latest leads from the database.
+
+Leads are auto-populated when you run missions with the Sales agent. You don't need to add them manually.
+
+### Campaigns
+
+A registry of marketing campaigns.
+
+| Column | What it shows |
+|--------|--------------|
+| NAME | Campaign name |
+| STATUS | draft, active, paused, completed |
+| CREATED | When the campaign was created |
+| ID | Unique campaign identifier |
+
+Campaigns can be created via the API (`POST /campaigns`). Future versions will allow creating campaigns directly from the UI.
+
+---
+
+## How Missions Work (Behind the Scenes)
+
+When you type a mission and hit DEPLOY, here's what happens:
+
+```
+1. YOUR REQUEST        "Find leads and generate marketing copy"
+       ↓
+2. PLANNER (Claude)    Breaks it into tasks:
+                         - Task 1: sales → find_leads_tool
+                         - Task 2: marketing → generate_copy_tool
+                         - Task 3: support → search_knowledge_base
+                         - Task 4: ops → schedule_task
+       ↓
+3. SECURITY CHECK      For each task:
+                         ✓ Is this agent allowed to use this tool?
+                         ✓ Has the agent exceeded its rate limit?
+                         ✓ Is the total cost still within budget?
+       ↓
+4. AGENT EXECUTION     Each agent consults Claude to decide:
+                         - Which tool to call
+                         - What arguments to pass
+                       Then executes the tool.
+       ↓
+5. EVALUATION          Did all tasks succeed?
+                         YES → Mission complete (status: goal_met)
+                         NO  → Re-plan and retry (up to 5 iterations)
+       ↓
+6. RESULTS             Full execution log returned to the UI:
+                         - Per-task results
+                         - Cost breakdown
+                         - Run ID for audit trail
+```
+
+### Automatic retries
+
+If a task fails, the system retries it up to 2 times before marking it as failed. You'll see a retry indicator (↻ 1, ↻ 2) next to failed tasks.
+
+### Budget enforcement
+
+Every tool has a cost estimate. The system tracks cumulative cost across all tasks in a run. If the budget limit is exceeded, the run halts immediately — no further tasks are executed.
+
+### Security
+
+The Security Layer enforces three rules before every tool execution:
+1. **Permissions** — Each agent can only use its assigned tools
+2. **Rate limits** — Maximum number of tool calls per agent per run
+3. **Budget** — Global cost ceiling per run
+
+These are not optional. They run on every single tool call, even in development mode.
+
+---
+
+## Tips for Effective Missions
+
+### Be specific about scope
+Instead of "find leads," try "find 20 B2B SaaS leads in the $50K-$200K ARR range in Austin TX."
+
+### Combine multiple objectives
+ProplanOS can handle multi-agent missions. "Find leads, generate outreach copy for each, and schedule follow-up calls for next week" will deploy Sales, Marketing, and Ops agents in sequence.
+
+### Check the Leads tab after Sales missions
+Every lead discovered by the Sales agent is automatically stored in the database. Switch to the Leads tab to see them, filter by score, and export.
+
+### Use the cost breakdown
+Each mission shows exactly what it cost. Use this to optimize — if a tool is consuming too much budget, adjust your request to be more targeted.
+
+### Run missions iteratively
+Start with a focused mission ("Find leads in Austin TX"), review results, then run a follow-up ("Generate outreach copy for the top 5 leads from the last run"). The system builds context over successive runs.
+
+---
+
+## API Access
+
+For programmatic access, the backend API is available at your deployment URL.
+
+### Quick reference
+
+```bash
+# Health check
+curl https://your-backend-url/health
+
+# Run a mission
+curl -X POST https://your-backend-url/agent/run \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{"user_id": "user-1", "request": "Find leads in Austin TX"}'
+
+# List leads (with score filter)
+curl "https://your-backend-url/leads?min_score=70"
+
+# Create a campaign
+curl -X POST https://your-backend-url/campaigns \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{"name": "Q2 Launch", "status": "active"}'
+
+# List campaigns
+curl https://your-backend-url/campaigns
+```
+
+### Authentication
+
+If `API_SECRET_KEY` is configured, include the `X-API-Key` header with every request to mutation endpoints (`POST /agent/run`, `POST /campaigns`). Read endpoints (`GET /health`, `GET /leads`, `GET /campaigns`) may also require it depending on configuration.
+
+---
+
+## Glossary
+
+| Term | Definition |
+|------|-----------|
+| **Mission** | A natural-language business objective you submit to ProplanOS |
+| **Agent** | A specialized AI worker (Sales, Marketing, Support, Ops) |
+| **Tool** | A function an agent can call (find_leads, generate_copy, etc.) |
+| **Task** | A single unit of work: one agent calling one tool with specific inputs |
+| **Planner** | The Claude LLM that breaks your mission into a task graph |
+| **Evaluator** | Checks if all tasks succeeded; decides whether to re-plan or stop |
+| **ICP Score** | Ideal Customer Profile score (0-100). Higher = better fit. |
+| **Run ID** | Unique identifier for each mission execution (for audit trails) |
+| **Budget** | Maximum cost allowed per mission run. Enforced automatically. |
+| **SecurityPolicy** | Rules governing which agents can use which tools, rate limits, and budget |
+
+---
+
+## Troubleshooting
+
+**"Connection failed" when running a mission**
+The frontend can't reach the backend. Check that the backend is running and the `VITE_API_URL` environment variable is set correctly.
+
+**Mission returns but all tasks show ✗ FAIL**
+This usually means the tools aren't registered or the security policy is blocking access. In development mode with mock LLMs, this shouldn't happen — contact your administrator.
+
+**Leads tab shows "NO LEADS ON RECORD"**
+Run a mission that involves the Sales agent (e.g., "Find leads in Austin TX"). Leads are auto-stored after each run.
+
+**Cost shows $0.00**
+You're running in dev mode with mock LLMs. Connect an Anthropic API key for real Claude planning with accurate cost tracking.
