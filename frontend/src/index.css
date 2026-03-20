@@ -858,6 +858,30 @@ body {
   to   { transform: rotate(360deg); }
 }
 
+/* ─── Reset / New Mission Button ─────────────────────────────── */
+.reset-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 20px;
+  padding: 8px 20px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  font-family: var(--font);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.reset-btn:hover {
+  background: var(--accent);
+  color: #000;
+}
+
 /* ─── Command Shake (empty submit) ───────────────────────────── */
 .cmd-shake {
   animation: shake-anim 0.4s ease;

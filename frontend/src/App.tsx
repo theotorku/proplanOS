@@ -220,6 +220,15 @@ export default function App() {
     }
   };
 
+  const resetMission = () => {
+    setResponse(null);
+    setMissionError(null);
+    setPrompt('');
+    setProcLines([]);
+    setProcIdx(0);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
   const useTemplate = (t: string) => {
     setPrompt(t);
     // Select all text so next keystroke replaces the template
@@ -444,6 +453,9 @@ export default function App() {
                       <span className="log-evt c-error">MISSION FAILED</span>
                     </div>
                     <div className="error-box"><strong>ERR:</strong> {missionError}</div>
+                    <button className="reset-btn" onClick={resetMission}>
+                      <RefreshCw size={11} /> NEW MISSION
+                    </button>
                   </div>
                 )}
 
@@ -520,6 +532,10 @@ export default function App() {
                         </div>
                       </div>
                     )}
+
+                    <button className="reset-btn" onClick={resetMission}>
+                      <RefreshCw size={11} /> NEW MISSION
+                    </button>
                   </div>
                 )}
               </div>
