@@ -201,21 +201,27 @@ def agent_run(body: AgentRunRequest):
     orchestrator = create_orchestrator()
     result = orchestrator.run(body.request)
 
-    # Persist any leads discovered during execution (shared utility — no duplication)
-    for lead in extract_leads_from_memory(result.get("memory", [])):
-        db.create_lead(lead)
+    # Persist any leads discovered during execution (non-fatal — don't crash the run)
+    try:
+        for lead in extract_leads_from_memory(result.get("memory", [])):
+            db.create_lead(lead)
+    except Exception as e:
+        logging.warning("Lead persistence failed (non-fatal): %s", e)
 
-    db.log_run(AgentSessionModel(
-        agent_type="orchestrator",
-        status="completed",
-        input_data={"user_id": body.user_id, "request": body.request},
-        output_data={
-            "status": result["status"],
-            "total_cost": result["total_cost"],
-            "run_id": result["run_id"]
-        },
-        cost_usd=result["total_cost"],
-    ))
+    try:
+        db.log_run(AgentSessionModel(
+            agent_type="orchestrator",
+            status="completed",
+            input_data={"user_id": body.user_id, "request": body.request},
+            output_data={
+                "status": result["status"],
+                "total_cost": result["total_cost"],
+                "run_id": result["run_id"]
+            },
+            cost_usd=result["total_cost"],
+        ))
+    except Exception as e:
+        logging.warning("Session logging failed (non-fatal): %s", e)
 
     return AgentRunResponse(
         status=result["status"],
