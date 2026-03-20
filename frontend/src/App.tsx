@@ -127,6 +127,9 @@ export default function App() {
   const [campaignsLoading, setCampaignsLoading] = useState(false);
   const [campaignsError, setCampaignsError] = useState<string | null>(null);
 
+  // Validation state
+  const [cmdShake, setCmdShake] = useState(false);
+
   const outputRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLInputElement>(null);
 
@@ -191,7 +194,13 @@ export default function App() {
   // ── Mission submit ─────────────────────────────────────────────
   const submit = async (e: React.BaseSyntheticEvent) => {
     e.preventDefault();
-    if (!prompt.trim() || isRunning) return;
+    if (isRunning) return;
+    if (!prompt.trim()) {
+      setCmdShake(true);
+      inputRef.current?.focus();
+      setTimeout(() => setCmdShake(false), 500);
+      return;
+    }
     setIsRunning(true);
     setMissionError(null);
     setResponse(null);
@@ -213,7 +222,11 @@ export default function App() {
 
   const useTemplate = (t: string) => {
     setPrompt(t);
-    inputRef.current?.focus();
+    // Select all text so next keystroke replaces the template
+    setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 0);
   };
 
   // ── Sidebar stats ──────────────────────────────────────────────
@@ -316,7 +329,11 @@ export default function App() {
               </div>
               <div className="sidebar-stat">
                 <span className="stat-label">RUN ID</span>
-                <span className="stat-value mono-xs">{response.run_id.slice(0, 14)}…</span>
+                <span
+                  className="stat-value mono-xs stat-clickable"
+                  title={`Click to copy: ${response.run_id}`}
+                  onClick={() => navigator.clipboard.writeText(response.run_id)}
+                >{response.run_id.slice(0, 14)}…</span>
               </div>
             </section>
           )}
@@ -483,16 +500,19 @@ export default function App() {
                       <div className="cost-block">
                         <p className="cost-title">COST BREAKDOWN</p>
                         <div className="cost-rows">
-                          {Object.entries(response.cost_breakdown).map(([agent, cost]) => (
-                            <div key={agent} className="cost-row">
-                              <span className="cost-agent">{agent.toUpperCase()}</span>
+                          {Object.entries(response.cost_breakdown).map(([taskId, cost]) => {
+                            const label = taskId.length > 12 ? taskId.slice(0, 8).toUpperCase() + '…' : taskId.toUpperCase();
+                            return (
+                            <div key={taskId} className="cost-row">
+                              <span className="cost-agent" title={taskId}>{label}</span>
                               <div className="cost-track">
                                 <div className="cost-bar"
-                                  style={{ width: `${(cost / response.total_cost) * 100}%`, backgroundColor: getAgent(agent).color }} />
+                                  style={{ width: `${(cost / response.total_cost) * 100}%`, backgroundColor: 'var(--accent)' }} />
                               </div>
                               <span className="cost-amt">${cost.toFixed(4)}</span>
                             </div>
-                          ))}
+                            );
+                          })}
                           <div className="cost-total">
                             <span>TOTAL</span>
                             <span style={{ color: 'var(--accent)' }}>${response.total_cost.toFixed(4)}</span>
@@ -506,7 +526,7 @@ export default function App() {
 
               {/* Command bar */}
               <div className="cmd-bar">
-                <form onSubmit={submit} className="cmd-form">
+                <form onSubmit={submit} className={`cmd-form ${cmdShake ? 'cmd-shake' : ''}`}>
                   <span className="cmd-prompt">[MISSION]&gt;</span>
                   <input
                     ref={inputRef}

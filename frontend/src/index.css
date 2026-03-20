@@ -478,7 +478,15 @@ body {
 
 .cost-rows  { display: flex; flex-direction: column; gap: 9px; }
 .cost-row   { display: flex; align-items: center; gap: 12px; font-size: 10px; }
-.cost-agent { width: 76px; color: var(--muted); letter-spacing: 0.07em; flex-shrink: 0; }
+.cost-agent {
+  width: 76px;
+  color: var(--muted);
+  letter-spacing: 0.07em;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .cost-track {
   flex: 1;
@@ -848,6 +856,34 @@ body {
 @keyframes spin-anim {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
+}
+
+/* ─── Command Shake (empty submit) ───────────────────────────── */
+.cmd-shake {
+  animation: shake-anim 0.4s ease;
+  border-color: var(--error) !important;
+}
+
+@keyframes shake-anim {
+  0%, 100% { transform: translateX(0); }
+  20%      { transform: translateX(-4px); }
+  40%      { transform: translateX(4px); }
+  60%      { transform: translateX(-3px); }
+  80%      { transform: translateX(3px); }
+}
+
+/* ─── Clickable stat (RUN ID copy) ───────────────────────────── */
+.stat-clickable {
+  cursor: pointer;
+  transition: color 0.12s;
+}
+
+.stat-clickable:hover {
+  color: var(--accent);
+}
+
+.stat-clickable:active {
+  color: var(--success);
 }
 
 /* ─── Responsive ─────────────────────────────────────────────── */
