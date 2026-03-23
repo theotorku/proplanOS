@@ -266,12 +266,13 @@ export default function App() {
   }, [isRunning, procIdx]);
 
   // ── Data fetching ──────────────────────────────────────────────
-  const fetchLeads = useCallback(async (score = minScore) => {
+  const fetchLeads = useCallback(async (score?: number) => {
+    const s = score ?? minScore;
     setLeadsLoading(true);
     setLeadsError(null);
     try {
       const params = new URLSearchParams({ limit: '100' });
-      if (score > 0) params.set('min_score', String(score));
+      if (s > 0) params.set('min_score', String(s));
       const res = await fetch(`${API_BASE_URL}/leads?${params}`, { headers: apiHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -281,7 +282,8 @@ export default function App() {
     } finally {
       setLeadsLoading(false);
     }
-  }, [minScore]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchRuns = useCallback(async () => {
     setRunsLoading(true);
@@ -832,7 +834,7 @@ export default function App() {
                     <select
                       className="filter-select"
                       value={minScore}
-                      onChange={e => setMinScore(+e.target.value)}
+                      onChange={e => { const v = +e.target.value; setMinScore(v); fetchLeads(v); }}
                     >
                       <option value={0}>ALL</option>
                       <option value={40}>40+</option>
