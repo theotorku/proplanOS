@@ -9,7 +9,7 @@ Endpoints:
     GET  /health         — Health check
 """
 
-from fastapi import FastAPI, HTTPException, Query, Depends, Security
+from fastapi import FastAPI, HTTPException, Query, Depends, Security, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field
@@ -18,6 +18,7 @@ import uuid
 import time
 import os
 import logging
+import threading
 
 from proplanOrchestrator import (
     Orchestrator, Tool, SalesAgent, MarketingAgent, SupportAgent, OpsAgent,
@@ -26,7 +27,7 @@ from proplanOrchestrator import (
     FindLeadsSchema, GenerateCopySchema, SearchKnowledgeBaseSchema,
     ScheduleTaskSchema, RunWorkflowSchema
 )
-from database import get_database, LeadModel, CampaignModel, AgentSessionModel, extract_leads_from_memory
+from database import get_database, LeadModel, CampaignModel, AgentSessionModel, BusinessProfileModel, extract_leads_from_memory
 from llm import AnthropicPlannerProvider, AnthropicAgentProvider
 
 try:
@@ -44,16 +45,14 @@ class AgentRunRequest(BaseModel):
     user_id: str = Field(..., description="ID of the requesting user")
     request: str = Field(...,
                          description="Natural-language request for the agent system")
+    business_context: Optional[str] = Field(
+        None, description="Business profile context injected into every agent run")
 
 
-class AgentRunResponse(BaseModel):
-    """Response body for POST /agent/run."""
+class AgentRunDispatchResponse(BaseModel):
+    """Response body for POST /agent/run (async dispatch)."""
     status: str
     run_id: str
-    user_id: str
-    total_cost: float
-    cost_breakdown: Dict[str, float]
-    memory: List[Dict[str, Any]]
 
 
 class AgentQueuedResponse(BaseModel):
@@ -79,6 +78,72 @@ class CampaignCreateRequest(BaseModel):
 # -----------------------------
 
 db = get_database()
+
+# -----------------------------
+# Async Run Store
+# -----------------------------
+# In-memory store for background run state (works for single-worker deployments).
+# Key: run_id → {status, result?, error?, _ts}
+_run_store: Dict[str, Dict[str, Any]] = {}
+_run_store_lock = threading.Lock()
+_RUN_TTL_SECONDS = 3600  # evict entries older than 1 hour
+
+
+def _evict_stale_runs() -> None:
+    """Remove finished run_store entries older than _RUN_TTL_SECONDS. Call under _run_store_lock."""
+    cutoff = time.time() - _RUN_TTL_SECONDS
+    stale = [
+        k for k, v in _run_store.items()
+        if v.get("status") != "running" and v.get("_ts", 0) < cutoff
+    ]
+    for k in stale:
+        del _run_store[k]
+
+
+def _run_orchestrator_bg(run_id: str, request: str, business_context: Optional[str], user_id: str) -> None:
+    """Background task: run orchestrator and write result to _run_store."""
+    started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    try:
+        orchestrator = create_orchestrator()
+        result = orchestrator.run(request, business_context=business_context)
+
+        try:
+            for lead in extract_leads_from_memory(result.get("memory", [])):
+                db.create_lead(lead)
+        except Exception as e:
+            logging.warning("Lead persistence failed (non-fatal): %s", e)
+
+        session_status = "completed" if result["status"] == "goal_met" else "failed"
+        try:
+            db.log_run(AgentSessionModel(
+                run_id=run_id,
+                user_id=user_id,
+                agent_type="orchestrator",
+                status=session_status,
+                input_data={"user_id": user_id, "request": request},
+                output_data={"status": result["status"], "total_cost": result["total_cost"], "run_id": result["run_id"]},
+                cost_usd=result["total_cost"],
+                started_at=started_at,
+                completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            ))
+        except Exception as e:
+            logging.warning("Session logging failed (non-fatal): %s", e)
+
+        final = {
+            "status": result["status"],
+            "run_id": result["run_id"],
+            "user_id": user_id,
+            "total_cost": result["total_cost"],
+            "cost_breakdown": result["cost_breakdown"],
+            "memory": result["memory"],
+        }
+        with _run_store_lock:
+            _run_store[run_id] = {"status": "completed", "result": final, "_ts": time.time()}
+
+    except Exception as e:
+        logging.error("Background run %s failed: %s", run_id, e, exc_info=True)
+        with _run_store_lock:
+            _run_store[run_id] = {"status": "failed", "error": str(e), "_ts": time.time()}
 
 
 # -----------------------------
@@ -189,48 +254,38 @@ def health_check():
     return {"status": "healthy", "timestamp": time.time()}
 
 
-@app.post("/agent/run", response_model=AgentRunResponse, tags=["Agent"],
-          dependencies=[Depends(verify_api_key)])
-def agent_run(body: AgentRunRequest):
+@app.post("/agent/run", response_model=AgentRunDispatchResponse, tags=["Agent"], dependencies=[Depends(verify_api_key)])
+def agent_run(body: AgentRunRequest, background_tasks: BackgroundTasks):
     """
-    Run the orchestrator with a natural-language request.
+    Dispatch an orchestrator run asynchronously.
 
-    The orchestrator will plan, dispatch tasks to agents, and evaluate results.
-    Returns cost tracking, execution memory, and run status.
+    Returns immediately with {run_id, status: "running"}.
+    Poll GET /agent/run/status/{run_id} for the result.
     """
-    orchestrator = create_orchestrator()
-    result = orchestrator.run(body.request)
+    run_id = str(uuid.uuid4())
+    with _run_store_lock:
+        _evict_stale_runs()
+        _run_store[run_id] = {"status": "running", "_ts": time.time()}
 
-    # Persist any leads discovered during execution (non-fatal — don't crash the run)
-    try:
-        for lead in extract_leads_from_memory(result.get("memory", [])):
-            db.create_lead(lead)
-    except Exception as e:
-        logging.warning("Lead persistence failed (non-fatal): %s", e)
-
-    try:
-        db.log_run(AgentSessionModel(
-            agent_type="orchestrator",
-            status="completed",
-            input_data={"user_id": body.user_id, "request": body.request},
-            output_data={
-                "status": result["status"],
-                "total_cost": result["total_cost"],
-                "run_id": result["run_id"]
-            },
-            cost_usd=result["total_cost"],
-        ))
-    except Exception as e:
-        logging.warning("Session logging failed (non-fatal): %s", e)
-
-    return AgentRunResponse(
-        status=result["status"],
-        run_id=result["run_id"],
-        user_id=body.user_id,
-        total_cost=result["total_cost"],
-        cost_breakdown=result["cost_breakdown"],
-        memory=result["memory"]
+    background_tasks.add_task(
+        _run_orchestrator_bg,
+        run_id,
+        body.request,
+        body.business_context,
+        body.user_id,
     )
+    return {"status": "running", "run_id": run_id}
+
+
+@app.get("/agent/run/status/{run_id}", tags=["Agent"], dependencies=[Depends(verify_api_key)])
+def agent_run_status(run_id: str):
+    """Poll for the result of an async orchestrator run."""
+    with _run_store_lock:
+        _evict_stale_runs()
+        run = _run_store.get(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found. It may have expired or the server restarted.")
+    return run
 
 
 @app.post("/agent/run/async", response_model=AgentQueuedResponse, status_code=202, tags=["Agent"],
@@ -249,7 +304,7 @@ def agent_run_async(body: AgentRunRequest):
 
 @app.get("/agent/run/{task_id}", response_model=AgentStatusResponse, tags=["Agent"],
          dependencies=[Depends(verify_api_key)])
-def agent_run_status(task_id: str):
+def agent_run_celery_status(task_id: str):
     """
     Check the status of an asynchronous orchestrator run.
     """
@@ -266,10 +321,37 @@ def agent_run_status(task_id: str):
         return {"status": "failed", "result": {"error": str(task.info)}}
 
 
+@app.get("/profile/{user_id}", response_model=BusinessProfileModel, tags=["Profile"],
+         dependencies=[Depends(verify_api_key)])
+def get_profile(user_id: str):
+    """Retrieve saved business profile for a user."""
+    profile = db.get_profile(user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found.")
+    return profile
+
+
+@app.put("/profile/{user_id}", response_model=BusinessProfileModel, tags=["Profile"],
+         dependencies=[Depends(verify_api_key)])
+def upsert_profile(user_id: str, body: BusinessProfileModel):
+    """Create or update the business profile for a user."""
+    body.user_id = user_id
+    return db.upsert_profile(body)
+
+
+@app.get("/runs", tags=["History"], dependencies=[Depends(verify_api_key)])
+def list_runs(
+    user_id: str = Query(..., description="User ID to filter runs"),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """List recent orchestrator runs for a user."""
+    return db.get_runs(user_id, limit=limit)
+
+
 @app.get("/leads", response_model=List[LeadModel], tags=["Leads"],
          dependencies=[Depends(verify_api_key)])
 def list_leads(
-    min_score: Optional[int] = Query(
+    min_score: Optional[float] = Query(
         None, ge=0, le=100, description="Minimum lead score filter"),
     limit: Optional[int] = Query(
         None, ge=1, le=500, description="Max results to return"),

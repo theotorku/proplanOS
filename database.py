@@ -54,9 +54,28 @@ class CampaignModel(BaseModel):
     updated_at: Optional[str] = None
 
 
+class BusinessProfileModel(BaseModel):
+    """Business profile for context injection into every agent run."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    company_name: Optional[str] = None
+    what_we_do: Optional[str] = None
+    icp: Optional[str] = None
+    target_industries: Optional[str] = None
+    company_size: Optional[str] = None
+    geography: Optional[str] = None
+    lead_signals: Optional[str] = None
+    value_proposition: Optional[str] = None
+    tone: str = "professional"
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class AgentSessionModel(BaseModel):
     """Agent session record matching the Supabase agent_sessions table."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    run_id: Optional[str] = None
+    user_id: Optional[str] = None
     lead_id: Optional[str] = None
     agent_type: str
     status: str = "running"
@@ -106,6 +125,7 @@ class InMemoryDatabase:
         self.leads: Dict[str, LeadModel] = {}
         self.campaigns: Dict[str, CampaignModel] = {}
         self.sessions: List[AgentSessionModel] = []
+        self.profiles: Dict[str, "BusinessProfileModel"] = {}
         logging.info("Initialized InMemoryDatabase")
 
     def get_leads(self, min_score: Optional[float] = None,
@@ -141,6 +161,20 @@ class InMemoryDatabase:
     def log_run(self, session: AgentSessionModel) -> None:
         with self._lock:
             self.sessions.append(session)
+
+    def get_profile(self, user_id: str) -> Optional["BusinessProfileModel"]:
+        return self.profiles.get(user_id)
+
+    def upsert_profile(self, profile: "BusinessProfileModel") -> "BusinessProfileModel":
+        profile.updated_at = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            self.profiles[profile.user_id] = profile
+        return profile
+
+    def get_runs(self, user_id: str, limit: int = 20) -> List[AgentSessionModel]:
+        with self._lock:
+            runs = [s for s in self.sessions if s.user_id == user_id and s.agent_type == "orchestrator"]
+        return list(reversed(runs))[:limit]
 
 
 # ============================================================
@@ -212,9 +246,42 @@ class SupabaseDatabase:
             data = session.model_dump(exclude_none=True)
             self.client.table("agent_sessions").insert(data).execute()
         except Exception as e:
-            logging.error("SupabaseDatabase.log_run failed: %s",
-                          e, exc_info=True)
+            logging.error("SupabaseDatabase.log_run failed: %s", e, exc_info=True)
             raise
+
+    def get_profile(self, user_id: str) -> Optional["BusinessProfileModel"]:
+        try:
+            result = self.client.table("business_profiles").select("*").eq("user_id", user_id).limit(1).execute()
+            return BusinessProfileModel(**result.data[0]) if result.data else None
+        except Exception as e:
+            logging.warning("SupabaseDatabase.get_profile failed: %s", e)
+            return None
+
+    def upsert_profile(self, profile: "BusinessProfileModel") -> "BusinessProfileModel":
+        try:
+            data = profile.model_dump(exclude_none=True)
+            data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self.client.table("business_profiles").upsert(data, on_conflict="user_id").execute()
+            return profile
+        except Exception as e:
+            logging.error("SupabaseDatabase.upsert_profile failed: %s", e, exc_info=True)
+            raise
+
+    def get_runs(self, user_id: str, limit: int = 20) -> List[AgentSessionModel]:
+        try:
+            result = (
+                self.client.table("agent_sessions")
+                .select("*")
+                .eq("user_id", user_id)
+                .eq("agent_type", "orchestrator")
+                .order("started_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return [AgentSessionModel(**row) for row in result.data]
+        except Exception as e:
+            logging.warning("SupabaseDatabase.get_runs failed: %s", e)
+            return []
 
 
 # ============================================================

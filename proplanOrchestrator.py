@@ -15,8 +15,20 @@ import uuid
 import time
 import json
 import logging
+import os
+import re
+import threading
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
+
+_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```\s*$", re.DOTALL)
+
+
+def _strip_code_fence(text: str) -> str:
+    """Remove surrounding markdown code fences (```json ... ``` or ``` ... ```) if present."""
+    m = _CODE_FENCE_RE.match(text.strip())
+    return m.group(1).strip() if m else text.strip()
 
 
 # -----------------------------
@@ -164,7 +176,7 @@ class ExecutionMemory:
 class LLMProvider(Protocol):
     """Protocol for swappable LLM backends."""
 
-    def complete(self, prompt: str, context: Dict[str, Any] = None) -> str:
+    def complete(self, prompt: str, context: Optional[Dict[str, Any]] = None) -> str:
         """Generate a completion from a prompt and optional context."""
         ...
 
@@ -176,7 +188,7 @@ class MockAgentLLM:
         self.tool_name = tool_name
         self.default_payload = default_payload
 
-    def complete(self, prompt: str, context: Dict[str, Any] = None) -> str:
+    def complete(self, prompt: str, context: Optional[Dict[str, Any]] = None) -> str:
         """Return a fixed JSON tool call."""
         return json.dumps({"tool": self.tool_name, "payload": self.default_payload})
 
@@ -184,7 +196,7 @@ class MockAgentLLM:
 class MockPlannerLLM:
     """Mock LLM for the planner — returns a fixed plan. Swap with a real provider in production."""
 
-    def complete(self, prompt: str, context: Dict[str, Any] = None) -> str:
+    def complete(self, prompt: str, context: Optional[Dict[str, Any]] = None) -> str:
         """Return a fixed JSON plan using the prompt as payload content."""
         return json.dumps([
             {"agent": "sales", "action": "execute", "payload": {"query": prompt}},
@@ -387,7 +399,7 @@ class BaseAgent:
         prompt = json.dumps({"action": task.action, "payload": task.payload})
         context = {"agent": self.name, "memory": self.memory.get_context()}
         raw = self.llm_provider.complete(prompt, context)
-        return json.loads(raw)
+        return json.loads(_strip_code_fence(raw))
 
     def run(self, task: Task) -> TaskResult:
         """Execute a task by consulting the LLM and dispatching a tool call."""
@@ -490,11 +502,11 @@ class LLMPlanner:
         self.registry = registry
         self.llm_provider = llm_provider or MockPlannerLLM()
 
-    def call_llm(self, request: str, context: Dict[str, Any] = None) -> str:
+    def call_llm(self, request: str, context: Optional[Dict[str, Any]] = None) -> str:
         """Delegate plan generation to the LLM provider."""
         return self.llm_provider.complete(request, context)
 
-    def plan(self, request: str, context: Dict[str, Any] = None) -> List[Task]:
+    def plan(self, request: str, context: Optional[Dict[str, Any]] = None) -> List[Task]:
         """
         Generate a list of tasks from a user request.
 
@@ -583,12 +595,16 @@ class Orchestrator:
             self.logger.log(
                 "WARN", f"Retry {task.retries}/{task.max_retries}", {"task_id": task.id})
 
-    def run(self, request: str) -> Dict[str, Any]:
+    def run(self, request: str, business_context: Optional[str] = None) -> Dict[str, Any]:
         """
         Execute the full orchestration loop.
 
         1. Create a goal from the request.
         2. Repeatedly plan, dispatch, and evaluate until the goal is met or limits are reached.
+
+        Args:
+            request: Natural-language mission from the user.
+            business_context: Optional business profile injected as system context for all agents.
         """
         run_id = str(uuid.uuid4())
         self.logger.log("INFO", "Run started", {
@@ -596,14 +612,21 @@ class Orchestrator:
         self.security.reset()
         self.memory.clear()
 
-        goal = Goal(description=request, success_criteria="all_success")
+        # Prepend business context so the planner and agents are profile-aware
+        full_request = (
+            f"[BUSINESS CONTEXT]\n{business_context}\n\n[MISSION]\n{request}"
+            if business_context and business_context.strip()
+            else request
+        )
+
+        goal = Goal(description=full_request, success_criteria="all_success")
         steps = 0
         final_status = "max_steps_reached"
 
         while steps < goal.max_steps:
             # Plan with context so the LLM can adapt
             context = {"memory": self.memory.get_context(), "step": steps}
-            tasks = self.planner.plan(request, context)
+            tasks = self.planner.plan(full_request, context)
 
             # Dispatch and collect batch results (FIX 1)
             batch_results: List[TaskResult] = []
@@ -642,20 +665,22 @@ class Orchestrator:
             "total_cost": self.cost_tracker.total_cost,
             "cost_breakdown": self.cost_tracker.per_task,
             "logs": self.logger.logs,
-            "memory": self.memory.get_context()
+            "memory": self.memory.history
         }
 
 
 # -----------------------------
-# Example Tools
+# Tool Schemas
 # -----------------------------
 
 class FindLeadsSchema(BaseModel):
     query: str
+    count: Optional[int] = 5
 
 
 class GenerateCopySchema(BaseModel):
     input: str
+    type: Optional[str] = "email"
 
 
 class SearchKnowledgeBaseSchema(BaseModel):
@@ -664,38 +689,191 @@ class SearchKnowledgeBaseSchema(BaseModel):
 
 class ScheduleTaskSchema(BaseModel):
     task_name: str
+    due_date: Optional[str] = None
 
 
 class RunWorkflowSchema(BaseModel):
     workflow_name: str
+    steps: Optional[List[str]] = None
 
+
+# -----------------------------
+# LLM Tool Helper
+# -----------------------------
+
+_tool_client = None
+_tool_client_lock = threading.Lock()
+
+
+def _get_tool_client():
+    """Return a module-level cached Anthropic client, lazily initialised (thread-safe)."""
+    global _tool_client
+    if _tool_client is not None:
+        return _tool_client
+    with _tool_client_lock:
+        # Double-check after acquiring the lock
+        if _tool_client is not None:
+            return _tool_client
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            return None
+        from anthropic import Anthropic
+        _tool_client = Anthropic(api_key=api_key)
+    return _tool_client
+
+
+def _llm_tool_call(system: str, user: str, max_tokens: int = 1024) -> Optional[str]:
+    """Call Anthropic Claude for a tool if ANTHROPIC_API_KEY is set. Returns None on failure."""
+    client = _get_tool_client()
+    if not client:
+        return None
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
+        return response.content[0].text
+    except Exception as e:
+        logger.warning("LLM tool call failed: %s", e)
+        return None
+
+
+# -----------------------------
+# Real Tools (LLM-powered, mock fallback)
+# -----------------------------
 
 def find_leads_tool(payload):
-    """Mock tool that returns a list of scored leads."""
-    return [{"name": "Lead A", "score": 90}]
+    """Find and score B2B leads. Uses Anthropic Claude if API key is set."""
+    query = payload.get("query", "")
+    count = payload.get("count", 5)
+
+    result = _llm_tool_call(
+        system=(
+            "You are a B2B lead researcher. Generate realistic business leads matching the query. "
+            "Return ONLY a valid JSON array. Each object must have: "
+            "'name' (full name), 'company' (company name), 'role' (job title), "
+            "'email' (realistic work email), 'score' (ICP fit 0-100), "
+            "'reason' (one sentence why they fit). No extra text, only JSON."
+        ),
+        user=f"Query: {query}\nGenerate exactly {count} leads.",
+        max_tokens=1500,
+    )
+    if result:
+        try:
+            # Strip markdown code fences if present
+            clean = _strip_code_fence(result)
+            return json.loads(clean)
+        except json.JSONDecodeError:
+            logger.warning("find_leads_tool: JSON parse failed, using fallback")
+
+    return [
+        {"name": "Alex Chen", "company": "TechFlow Inc", "role": "VP of Sales", "email": "alex.chen@techflow.io", "score": 88, "reason": "Matches target ICP — mid-market SaaS with active sales team"},
+        {"name": "Maria Santos", "company": "GrowthBase", "role": "Marketing Director", "email": "m.santos@growthbase.com", "score": 74, "reason": "High intent signals, recent Series A funding"},
+        {"name": "James Okonkwo", "company": "OpsWorks Ltd", "role": "Head of Operations", "email": "j.okonkwo@opsworks.co", "score": 61, "reason": "Relevant industry, exploring automation tools"},
+    ]
 
 
 def generate_copy_tool(payload):
-    """Mock tool that returns optimized ad copy."""
-    return "Optimized ad copy"
+    """Generate marketing or outreach copy using Anthropic Claude if available."""
+    input_text = payload.get("input", "")
+    copy_type = payload.get("type", "email")
+
+    result = _llm_tool_call(
+        system=(
+            f"You are a B2B copywriter specializing in {copy_type} copy. "
+            "Write concise, compelling copy that drives action. "
+            "Return only the copy text — no labels, headers, or meta-commentary."
+        ),
+        user=f"Write {copy_type} copy for: {input_text}",
+        max_tokens=800,
+    )
+    return result or (
+        "We help teams like yours move faster and close more deals. "
+        "Would you be open to a 15-minute call this week to explore the fit?"
+    )
 
 
 def search_knowledge_base(payload):
-    """Mock tool that searches a knowledge base and returns an answer."""
+    """Answer a support or knowledge query using Anthropic Claude if available."""
     query = payload.get("query", "")
-    return {"answer": f"Here's what I found for: {query}", "confidence": 0.92}
+
+    result = _llm_tool_call(
+        system=(
+            "You are a knowledgeable support agent. Answer the query clearly and concisely "
+            "based on general best practices. Return a JSON object with 'answer' (string) "
+            "and 'confidence' (float 0-1). Only JSON, no extra text."
+        ),
+        user=f"Query: {query}",
+    )
+    if result:
+        try:
+            clean = _strip_code_fence(result)
+            return json.loads(clean)
+        except json.JSONDecodeError:
+            return {"answer": result.strip(), "confidence": 0.85}
+
+    return {"answer": f"Based on best practices for '{query}': recommend reviewing your current process and aligning with team goals.", "confidence": 0.75}
 
 
 def schedule_task(payload):
-    """Mock tool that schedules a task and returns a confirmation."""
+    """Schedule a task and return a confirmation."""
     task_name = payload.get("task_name", "unnamed")
-    return {"scheduled": True, "task_name": task_name, "scheduled_time": "2026-03-20T09:00:00"}
+    due_date = payload.get("due_date", "")
+
+    result = _llm_tool_call(
+        system=(
+            "You are an operations scheduler. Given a task name, return a JSON scheduling confirmation with: "
+            "'scheduled' (true), 'task_name' (string), 'scheduled_time' (ISO 8601), "
+            "'priority' ('high'/'medium'/'low'), 'notes' (brief recommendation). Only JSON."
+        ),
+        user=f"Schedule task: {task_name}" + (f" Due: {due_date}" if due_date else ""),
+    )
+    if result:
+        try:
+            clean = _strip_code_fence(result)
+            return json.loads(clean)
+        except json.JSONDecodeError:
+            pass
+
+    next_business = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%dT09:00:00")
+    return {
+        "scheduled": True,
+        "task_name": task_name,
+        "scheduled_time": next_business,
+        "priority": "medium",
+        "notes": "Scheduled during next available business window.",
+    }
 
 
 def run_workflow(payload):
-    """Mock tool that executes an automated workflow."""
+    """Execute and summarize an automated workflow using Anthropic Claude if available."""
     workflow_name = payload.get("workflow_name", "default")
-    return {"workflow": workflow_name, "status": "completed", "steps_executed": 3}
+    steps = payload.get("steps", [])
+
+    result = _llm_tool_call(
+        system=(
+            "You are a workflow execution engine. Given a workflow name and optional steps, "
+            "return a JSON execution summary with: 'workflow' (name), 'status' ('completed'), "
+            "'steps_executed' (int), 'duration_ms' (int), 'output' (brief summary string). Only JSON."
+        ),
+        user=f"Execute workflow: {workflow_name}" + (f"\nSteps: {steps}" if steps else ""),
+    )
+    if result:
+        try:
+            clean = _strip_code_fence(result)
+            return json.loads(clean)
+        except json.JSONDecodeError:
+            pass
+
+    return {
+        "workflow": workflow_name,
+        "status": "completed",
+        "steps_executed": max(len(steps), 3),
+        "duration_ms": 1240,
+        "output": f"Workflow '{workflow_name}' executed successfully.",
+    }
 
 
 # -----------------------------

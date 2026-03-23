@@ -1,10 +1,84 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Terminal, Activity, Shield, Zap, CheckCircle, XCircle, RefreshCw, Users, Megaphone } from 'lucide-react';
+import { Send, Terminal, Activity, Shield, Zap, CheckCircle, XCircle, RefreshCw, Users, Megaphone, Settings, Save } from 'lucide-react';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
 // ─── Types ──────────────────────────────────────────────────────
-type View = 'mission' | 'leads' | 'campaigns';
+type View = 'mission' | 'leads' | 'campaigns' | 'profile' | 'history';
+
+type RunHistory = {
+  id: string;
+  run_id: string | null;
+  status: string;
+  input_data: { request?: string; user_id?: string } | null;
+  output_data: { total_cost?: number; status?: string } | null;
+  cost_usd: number | null;
+  started_at: string | null;
+};
+
+const USER_ID_KEY = 'proplan_user_id';
+
+function getOrCreateUserId(): string {
+  const existing = localStorage.getItem(USER_ID_KEY);
+  if (existing) return existing;
+  const id = `user-${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2, 18)}`;
+  localStorage.setItem(USER_ID_KEY, id);
+  return id;
+}
+
+type BusinessProfile = {
+  company_name: string;
+  what_we_do: string;
+  icp: string;
+  target_industries: string;
+  company_size: string;
+  geography: string;
+  lead_signals: string;
+  value_proposition: string;
+  tone: string;
+};
+
+const EMPTY_PROFILE: BusinessProfile = {
+  company_name: '',
+  what_we_do: '',
+  icp: '',
+  target_industries: '',
+  company_size: '',
+  geography: '',
+  lead_signals: '',
+  value_proposition: '',
+  tone: 'professional',
+};
+
+const PROFILE_KEY = 'proplan_business_profile';
+
+function loadProfile(): BusinessProfile {
+  try {
+    const raw = localStorage.getItem(PROFILE_KEY);
+    return raw ? { ...EMPTY_PROFILE, ...JSON.parse(raw) } : EMPTY_PROFILE;
+  } catch {
+    return EMPTY_PROFILE;
+  }
+}
+
+function profileToContext(p: BusinessProfile): string | null {
+  if (!p.company_name && !p.what_we_do && !p.icp) return null;
+  const lines: string[] = [];
+  if (p.company_name)       lines.push(`Company: ${p.company_name}`);
+  if (p.what_we_do)         lines.push(`What we do: ${p.what_we_do}`);
+  if (p.icp)                lines.push(`Ideal Customer Profile: ${p.icp}`);
+  if (p.target_industries)  lines.push(`Target industries: ${p.target_industries}`);
+  if (p.company_size)       lines.push(`Target company size: ${p.company_size}`);
+  if (p.geography)          lines.push(`Geography: ${p.geography}`);
+  if (p.lead_signals)       lines.push(`Lead qualification signals: ${p.lead_signals}`);
+  if (p.value_proposition)  lines.push(`Value proposition: ${p.value_proposition}`);
+  if (p.tone)               lines.push(`Communication tone: ${p.tone}`);
+  return lines.join('\n');
+}
+
+function profileComplete(p: BusinessProfile): boolean {
+  return !!(p.company_name && p.what_we_do && p.icp);
+}
 
 type TaskMemory = {
   task: {
@@ -33,8 +107,8 @@ type OrchestratorResponse = {
 
 type Lead = {
   id: string;
-  name: string;
-  score: number;
+  full_name: string;
+  icp_score: number | null;
   source: string;
 };
 
@@ -42,7 +116,7 @@ type Campaign = {
   id: string;
   name: string;
   status: string;
-  created_at: number;
+  created_at: string | null;
 };
 
 // ─── Agent Registry ──────────────────────────────────────────────
@@ -60,13 +134,14 @@ function getAgent(name: string) {
 // ─── Processing Log Sequence ──────────────────────────────────────
 const PROC_LINES = [
   '> Initializing secure agent environment...',
-  '> Parsing mission parameters...',
-  '> Planner LLM generating task graph...',
+  '> Injecting business context into planner...',
+  '> Anthropic Claude generating task graph...',
   '> Security layer: permissions validated...',
   '> Rate limit check — OK',
   '> Budget gate — OK',
   '> Dispatching to registered agent pool...',
-  '> Executing task queue...',
+  '> Agents executing with real AI — please wait...',
+  '> Polling for results every 2s...',
 ];
 
 // ─── Mission Templates ───────────────────────────────────────────
@@ -97,8 +172,9 @@ function statusColor(status: string): string {
   }
 }
 
-function formatDate(unix: number): string {
-  return new Date(unix * 1000).toLocaleDateString('en-US', {
+function formatDate(iso: string | null): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('en-US', {
     month: 'short', day: '2-digit', year: 'numeric',
   });
 }
@@ -107,6 +183,19 @@ function formatDate(unix: number): string {
 export default function App() {
   // View
   const [view, setView] = useState<View>('mission');
+
+  // User identity (persistent across sessions)
+  const [userId] = useState<string>(getOrCreateUserId);
+
+  // Profile state
+  const [profile, setProfile]           = useState<BusinessProfile>(loadProfile);
+  const [profileDraft, setProfileDraft] = useState<BusinessProfile>(loadProfile);
+  const [profileSaved, setProfileSaved] = useState(false);
+
+  // History state
+  const [runs, setRuns]               = useState<RunHistory[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
+  const [runsError, setRunsError]     = useState<string | null>(null);
 
   // Mission state
   const [prompt, setPrompt]       = useState('');
@@ -159,7 +248,9 @@ export default function App() {
     setLeadsLoading(true);
     setLeadsError(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/leads?min_score=${score}&limit=100`);
+      const params = new URLSearchParams({ limit: '100' });
+      if (score > 0) params.set('min_score', String(score));
+      const res = await fetch(`${API_BASE_URL}/leads?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setLeads(data.leads ?? data ?? []);
@@ -169,6 +260,20 @@ export default function App() {
       setLeadsLoading(false);
     }
   }, [minScore]);
+
+  const fetchRuns = useCallback(async () => {
+    setRunsLoading(true);
+    setRunsError(null);
+    try {
+      const res = await fetch(`${API_BASE_URL}/runs?user_id=${userId}&limit=20`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setRuns(await res.json());
+    } catch (err: unknown) {
+      setRunsError(err instanceof Error ? err.message : 'Failed to load history.');
+    } finally {
+      setRunsLoading(false);
+    }
+  }, [userId]);
 
   const fetchCampaigns = useCallback(async () => {
     setCampaignsLoading(true);
@@ -185,13 +290,29 @@ export default function App() {
     }
   }, []);
 
+  // Load profile from API on mount (falls back to localStorage if unavailable)
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/profile/${userId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data) {
+          const merged = { ...EMPTY_PROFILE, ...data };
+          setProfile(merged);
+          setProfileDraft(merged);
+          localStorage.setItem(PROFILE_KEY, JSON.stringify(merged));
+        }
+      })
+      .catch(() => { /* silently use localStorage */ });
+  }, [userId]);
+
   // Fetch on view switch
   useEffect(() => {
     if (view === 'leads')     fetchLeads();
     if (view === 'campaigns') fetchCampaigns();
-  }, [view, fetchLeads, fetchCampaigns]);
+    if (view === 'history')   fetchRuns();
+  }, [view, fetchLeads, fetchCampaigns, fetchRuns]);
 
-  // ── Mission submit ─────────────────────────────────────────────
+  // ── Mission submit (async + polling) ──────────────────────────
   const submit = async (e: React.BaseSyntheticEvent) => {
     e.preventDefault();
     if (isRunning) return;
@@ -206,18 +327,49 @@ export default function App() {
     setResponse(null);
 
     try {
+      // 1. Dispatch
       const res = await fetch(`${API_BASE_URL}/agent/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: 'user-demo', request: prompt }),
+        body: JSON.stringify({
+          user_id: userId,
+          request: prompt,
+          business_context: profileToContext(profile) ?? undefined,
+        }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setResponse(await res.json());
+      const { run_id } = await res.json();
+
+      // 2. Poll every 2s for up to 3 minutes
+      for (let i = 0; i < 90; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        const poll = await fetch(`${API_BASE_URL}/agent/run/status/${run_id}`);
+        if (!poll.ok) throw new Error(`Poll failed: HTTP ${poll.status}`);
+        const data = await poll.json();
+        if (data.status === 'completed') { setResponse(data.result); return; }
+        if (data.status === 'failed')    { throw new Error(data.error || 'Mission failed.'); }
+      }
+      throw new Error('Mission timed out after 3 minutes.');
     } catch (err: unknown) {
       setMissionError(err instanceof Error ? err.message : 'Connection failed.');
     } finally {
       setIsRunning(false);
     }
+  };
+
+  // ── Profile save (localStorage + API) ─────────────────────────
+  const saveProfile = async () => {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(profileDraft));
+    setProfile(profileDraft);
+    try {
+      await fetch(`${API_BASE_URL}/profile/${userId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...profileDraft, user_id: userId }),
+      });
+    } catch { /* silently fail — localStorage already saved */ }
+    setProfileSaved(true);
+    setTimeout(() => setProfileSaved(false), 2000);
   };
 
   const resetMission = () => {
@@ -240,7 +392,7 @@ export default function App() {
 
   // ── Sidebar stats ──────────────────────────────────────────────
   const avgScore = leads.length
-    ? Math.round(leads.reduce((a, l) => a + l.score, 0) / leads.length)
+    ? Math.round(leads.reduce((a, l) => a + (l.icp_score ?? 0), 0) / leads.length)
     : null;
 
   const activeCampaigns = campaigns.filter(c => c.status.toLowerCase() === 'active').length;
@@ -261,7 +413,7 @@ export default function App() {
           <div className="header-separator" />
           {/* View tabs */}
           <nav className="view-tabs">
-            {(['mission', 'leads', 'campaigns'] as View[]).map(v => (
+            {(['mission', 'leads', 'campaigns', 'history', 'profile'] as View[]).map(v => (
               <button
                 key={v}
                 className={`view-tab ${view === v ? 'view-tab-active' : ''}`}
@@ -270,7 +422,12 @@ export default function App() {
                 {v === 'mission'   && <Terminal  size={11} />}
                 {v === 'leads'     && <Users      size={11} />}
                 {v === 'campaigns' && <Megaphone  size={11} />}
+                {v === 'history'   && <Activity   size={11} />}
+                {v === 'profile'   && <Settings   size={11} />}
                 {v.toUpperCase()}
+                {v === 'profile' && !profileComplete(profile) && (
+                  <span className="tab-dot-warn" title="Profile incomplete" />
+                )}
               </button>
             ))}
           </nav>
@@ -362,7 +519,7 @@ export default function App() {
               )}
               <div className="sidebar-stat">
                 <span className="stat-label">HIGH FIT</span>
-                <span className="stat-value c-accent">{leads.filter(l => l.score >= 70).length}</span>
+                <span className="stat-value c-accent">{leads.filter(l => (l.icp_score ?? 0) >= 70).length}</span>
               </div>
               <div className="sidebar-stat">
                 <span className="stat-label">FROM AGENT</span>
@@ -385,6 +542,58 @@ export default function App() {
               <div className="sidebar-stat">
                 <span className="stat-label">DRAFT</span>
                 <span className="stat-value">{campaigns.filter(c => c.status === 'draft').length}</span>
+              </div>
+            </section>
+          )}
+
+          {view === 'history' && (
+            <section className="sidebar-section">
+              <p className="sidebar-title">RUN HISTORY</p>
+              <div className="sidebar-stat">
+                <span className="stat-label">TOTAL RUNS</span>
+                <span className="stat-value">{runs.length}</span>
+              </div>
+              <div className="sidebar-stat">
+                <span className="stat-label">COMPLETED</span>
+                <span className="stat-value c-success">{runs.filter(r => r.status === 'completed').length}</span>
+              </div>
+              <div className="sidebar-stat">
+                <span className="stat-label">TOTAL COST</span>
+                <span className="stat-value c-accent">
+                  ${runs.reduce((a, r) => a + (r.cost_usd ?? 0), 0).toFixed(4)}
+                </span>
+              </div>
+              <div className="sidebar-stat">
+                <span className="stat-label">USER ID</span>
+                <span
+                  className="stat-value mono-xs stat-clickable"
+                  title={`Click to copy: ${userId}`}
+                  onClick={() => navigator.clipboard.writeText(userId)}
+                >{userId.slice(0, 14)}…</span>
+              </div>
+            </section>
+          )}
+
+          {view === 'profile' && (
+            <section className="sidebar-section">
+              <p className="sidebar-title">PROFILE STATUS</p>
+              <div className="sidebar-stat">
+                <span className="stat-label">COMPANY</span>
+                <span className="stat-value" style={{ color: profile.company_name ? 'var(--text)' : 'var(--muted)' }}>
+                  {profile.company_name || '—'}
+                </span>
+              </div>
+              <div className="sidebar-stat">
+                <span className="stat-label">ICP SET</span>
+                <span className={`stat-value ${profile.icp ? 'c-success' : 'c-error'}`}>
+                  {profile.icp ? 'YES' : 'NO'}
+                </span>
+              </div>
+              <div className="sidebar-stat">
+                <span className="stat-label">CONTEXT</span>
+                <span className={`stat-value ${profileComplete(profile) ? 'c-accent' : 'c-warn'}`}>
+                  {profileComplete(profile) ? 'ACTIVE' : 'INCOMPLETE'}
+                </span>
               </div>
             </section>
           )}
@@ -416,7 +625,7 @@ export default function App() {
                     <div className="templates-wrap">
                       <p className="templates-label">─── MISSION TEMPLATES ───</p>
                       {TEMPLATES.map((t, i) => (
-                        <button key={i} className="template-btn" onClick={() => useTemplate(t)}>
+                        <button key={t} className="template-btn" onClick={() => useTemplate(t)}>
                           <span className="template-num">{String(i + 1).padStart(2, '0')}</span>
                           <span className="template-text">{t}</span>
                           <Zap size={11} className="template-zap" />
@@ -437,7 +646,7 @@ export default function App() {
                       <span className="log-val">{prompt}</span>
                     </div>
                     {procLines.map((line, i) => (
-                      <div key={i} className="proc-line" style={{ animationDelay: `${i * 0.04}s` }}>
+                      <div key={line} className="proc-line" style={{ animationDelay: `${i * 0.04}s` }}>
                         {line}
                       </div>
                     ))}
@@ -630,22 +839,22 @@ export default function App() {
                       {leads.map((lead, i) => (
                         <tr key={lead.id}>
                           <td className="td-muted">{String(i + 1).padStart(2, '0')}</td>
-                          <td className="td-name">{lead.name}</td>
+                          <td className="td-name">{lead.full_name}</td>
                           <td>
                             <div className="score-cell">
-                              <span className="score-num" style={{ color: scoreColor(lead.score) }}>
-                                {lead.score}
+                              <span className="score-num" style={{ color: scoreColor(lead.icp_score ?? 0) }}>
+                                {lead.icp_score ?? '—'}
                               </span>
                               <div className="score-track">
                                 <div className="score-bar"
-                                  style={{ width: `${lead.score}%`, backgroundColor: scoreColor(lead.score) }} />
+                                  style={{ width: `${lead.icp_score ?? 0}%`, backgroundColor: scoreColor(lead.icp_score ?? 0) }} />
                               </div>
                             </div>
                           </td>
                           <td>
                             <span className="fit-badge"
-                              style={{ color: scoreColor(lead.score), borderColor: scoreColor(lead.score) + '44', backgroundColor: scoreColor(lead.score) + '12' }}>
-                              {lead.score >= 70 ? 'HIGH' : lead.score >= 40 ? 'MID' : 'LOW'}
+                              style={{ color: scoreColor(lead.icp_score ?? 0), borderColor: scoreColor(lead.icp_score ?? 0) + '44', backgroundColor: scoreColor(lead.icp_score ?? 0) + '12' }}>
+                              {(lead.icp_score ?? 0) >= 70 ? 'HIGH' : (lead.icp_score ?? 0) >= 40 ? 'MID' : 'LOW'}
                             </span>
                           </td>
                           <td>
@@ -724,6 +933,233 @@ export default function App() {
                   </table>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ════ HISTORY VIEW ════ */}
+          {view === 'history' && (
+            <div className="data-view">
+              <div className="data-toolbar">
+                <div className="toolbar-left">
+                  <span className="toolbar-title">MISSION HISTORY</span>
+                  <span className="toolbar-count">{runs.length} RUNS</span>
+                </div>
+                <div className="toolbar-right">
+                  <button className="toolbar-btn" onClick={fetchRuns} disabled={runsLoading}>
+                    <RefreshCw size={11} className={runsLoading ? 'spin' : ''} />
+                    REFRESH
+                  </button>
+                </div>
+              </div>
+
+              {runsError && <div className="error-box" style={{ margin: '0 0 16px' }}><strong>ERR:</strong> {runsError}</div>}
+
+              {runsLoading && (
+                <div className="data-loading">
+                  <span className="blink">█</span> QUERYING DATABASE...
+                </div>
+              )}
+
+              {!runsLoading && runs.length === 0 && !runsError && (
+                <div className="data-empty">
+                  <Activity size={28} style={{ color: 'var(--muted)', marginBottom: 12 }} />
+                  <p>NO RUNS ON RECORD</p>
+                  <p className="data-empty-sub">Your mission history will appear here after your first run.</p>
+                </div>
+              )}
+
+              {!runsLoading && runs.length > 0 && (
+                <div className="data-table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>MISSION</th>
+                        <th>STATUS</th>
+                        <th>COST</th>
+                        <th>DATE</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {runs.map((run, i) => (
+                        <tr key={run.id}>
+                          <td className="td-muted">{String(i + 1).padStart(2, '0')}</td>
+                          <td className="td-name" style={{ maxWidth: 340 }}>
+                            {run.input_data?.request
+                              ? run.input_data.request.length > 72
+                                ? run.input_data.request.slice(0, 72) + '…'
+                                : run.input_data.request
+                              : '—'}
+                          </td>
+                          <td>
+                            <span className="status-badge" style={{
+                              color: run.status === 'completed' ? 'var(--success)' : run.status === 'failed' ? 'var(--error)' : 'var(--warn)',
+                              borderColor: (run.status === 'completed' ? 'var(--success)' : run.status === 'failed' ? 'var(--error)' : 'var(--warn)') + '44',
+                              backgroundColor: (run.status === 'completed' ? 'var(--success)' : run.status === 'failed' ? 'var(--error)' : 'var(--warn)') + '12',
+                            }}>
+                              {run.status.toUpperCase()}
+                            </span>
+                          </td>
+                          <td style={{ color: 'var(--accent)' }}>
+                            {run.cost_usd != null ? `$${run.cost_usd.toFixed(4)}` : '—'}
+                          </td>
+                          <td className="td-muted">
+                            {run.started_at ? new Date(run.started_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ════ PROFILE VIEW ════ */}
+          {view === 'profile' && (
+            <div className="profile-view">
+              <div className="profile-header">
+                <div>
+                  <p className="profile-title">BUSINESS PROFILE</p>
+                  <p className="profile-subtitle">
+                    This context is silently injected into every agent run. Fill it once — agents remember forever.
+                  </p>
+                </div>
+                <button
+                  className={`profile-save-btn ${profileSaved ? 'profile-save-btn-ok' : ''}`}
+                  onClick={saveProfile}
+                >
+                  {profileSaved
+                    ? <><CheckCircle size={11} /> SAVED</>
+                    : <><Save size={11} /> SAVE PROFILE</>}
+                </button>
+              </div>
+
+              {!profileComplete(profile) && (
+                <div className="profile-banner">
+                  <Zap size={11} style={{ color: 'var(--warn)', flexShrink: 0 }} />
+                  <span>Profile incomplete — agents are operating without business context. Fill in at least Company, Description, and ICP.</span>
+                </div>
+              )}
+
+              <div className="profile-form">
+                {/* Section: Identity */}
+                <div className="profile-section">
+                  <p className="profile-section-title">── IDENTITY ──────────────────────</p>
+
+                  <div className="profile-field">
+                    <label className="profile-label">COMPANY NAME <span className="profile-req">*</span></label>
+                    <input
+                      className="profile-input"
+                      value={profileDraft.company_name}
+                      onChange={e => setProfileDraft(d => ({ ...d, company_name: e.target.value }))}
+                      placeholder="e.g. Acme SaaS"
+                    />
+                  </div>
+
+                  <div className="profile-field">
+                    <label className="profile-label">WHAT WE DO <span className="profile-req">*</span></label>
+                    <textarea
+                      className="profile-textarea"
+                      rows={2}
+                      value={profileDraft.what_we_do}
+                      onChange={e => setProfileDraft(d => ({ ...d, what_we_do: e.target.value }))}
+                      placeholder="e.g. Project management tool for construction firms"
+                    />
+                  </div>
+
+                  <div className="profile-field">
+                    <label className="profile-label">VALUE PROPOSITION</label>
+                    <textarea
+                      className="profile-textarea"
+                      rows={2}
+                      value={profileDraft.value_proposition}
+                      onChange={e => setProfileDraft(d => ({ ...d, value_proposition: e.target.value }))}
+                      placeholder="e.g. We cut project overruns by 30% through automated scheduling"
+                    />
+                  </div>
+                </div>
+
+                {/* Section: Target Market */}
+                <div className="profile-section">
+                  <p className="profile-section-title">── TARGET MARKET ─────────────────</p>
+
+                  <div className="profile-field">
+                    <label className="profile-label">IDEAL CUSTOMER PROFILE (ICP) <span className="profile-req">*</span></label>
+                    <textarea
+                      className="profile-textarea"
+                      rows={2}
+                      value={profileDraft.icp}
+                      onChange={e => setProfileDraft(d => ({ ...d, icp: e.target.value }))}
+                      placeholder="e.g. Ops managers at construction companies, 50–500 employees, US-based"
+                    />
+                  </div>
+
+                  <div className="profile-row">
+                    <div className="profile-field">
+                      <label className="profile-label">TARGET INDUSTRIES</label>
+                      <input
+                        className="profile-input"
+                        value={profileDraft.target_industries}
+                        onChange={e => setProfileDraft(d => ({ ...d, target_industries: e.target.value }))}
+                        placeholder="e.g. Construction, Real Estate, Manufacturing"
+                      />
+                    </div>
+                    <div className="profile-field">
+                      <label className="profile-label">COMPANY SIZE</label>
+                      <input
+                        className="profile-input"
+                        value={profileDraft.company_size}
+                        onChange={e => setProfileDraft(d => ({ ...d, company_size: e.target.value }))}
+                        placeholder="e.g. 10–500 employees"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="profile-row">
+                    <div className="profile-field">
+                      <label className="profile-label">GEOGRAPHY</label>
+                      <input
+                        className="profile-input"
+                        value={profileDraft.geography}
+                        onChange={e => setProfileDraft(d => ({ ...d, geography: e.target.value }))}
+                        placeholder="e.g. US, Canada"
+                      />
+                    </div>
+                    <div className="profile-field">
+                      <label className="profile-label">COMMUNICATION TONE</label>
+                      <select
+                        className="profile-select"
+                        value={profileDraft.tone}
+                        onChange={e => setProfileDraft(d => ({ ...d, tone: e.target.value }))}
+                      >
+                        <option value="professional">Professional</option>
+                        <option value="direct">Direct &amp; concise</option>
+                        <option value="casual">Casual &amp; friendly</option>
+                        <option value="consultative">Consultative</option>
+                        <option value="bold">Bold &amp; assertive</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section: Lead Intelligence */}
+                <div className="profile-section">
+                  <p className="profile-section-title">── LEAD INTELLIGENCE ─────────────</p>
+
+                  <div className="profile-field">
+                    <label className="profile-label">QUALIFICATION SIGNALS</label>
+                    <textarea
+                      className="profile-textarea"
+                      rows={2}
+                      value={profileDraft.lead_signals}
+                      onChange={e => setProfileDraft(d => ({ ...d, lead_signals: e.target.value }))}
+                      placeholder="e.g. Posted job for 'project coordinator', uses Procore, raised Series A funding"
+                    />
+                    <p className="profile-hint">What signals indicate a lead is a strong fit for your product?</p>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 

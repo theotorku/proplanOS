@@ -1,4 +1,4 @@
-# ProPlan Agent Architecture – Master Documentation
+# ProPlan Agent Architecture — Master Documentation
 
 ---
 
@@ -32,14 +32,14 @@ Become the default AI infrastructure layer for service-based businesses.
 
 ## Architecture Layers
 
-1. Frontend (React + Chakra UI)
-2. API Gateway (FastAPI)
-3. Agent Orchestrator
-4. Multi-Agent Layer
-5. Tool Layer
-6. Memory Layer
-7. Security Layer
-8. Infrastructure Layer
+1. **Frontend** — React + Vite single-page app (terminal-aesthetic UI)
+2. **API Gateway** — FastAPI with async dispatch and CORS
+3. **Agent Orchestrator** — Plan → dispatch → evaluate loop with LLM-powered planning
+4. **Multi-Agent Layer** — Sales, Marketing, Support, Ops agents with injected LLM providers
+5. **Tool Layer** — LLM-powered tools with mock fallbacks (find leads, generate copy, etc.)
+6. **Memory Layer** — ExecutionMemory for task history, BusinessProfile for context injection
+7. **Security Layer** — Per-agent permissions, rate limits, budget enforcement
+8. **Infrastructure Layer** — Supabase (production DB), InMemoryDatabase (dev), optional Celery
 
 ---
 
@@ -47,30 +47,33 @@ Become the default AI infrastructure layer for service-based businesses.
 
 ## Backend
 
-* Python
-* FastAPI
-* Pydantic
+* Python 3.13+
+* FastAPI (async dispatch with BackgroundTasks)
+* Pydantic v2 (request/response validation)
+* Anthropic SDK (Claude Sonnet for planning/routing, Claude Haiku for tool calls)
 
 ## Frontend
 
-* React (Vite)
-* Chakra UI
+* React 18 (Vite)
+* TypeScript
+* Custom terminal-aesthetic UI (IBM Plex Mono, CSS variables, scanlines)
+* Lucide React (icons)
 
 ## Database
 
-* Supabase (Postgres)
-* Vector DB (pgvector)
+* Supabase (Postgres) — production
+* InMemoryDatabase — development/testing fallback
+* Tables: leads, campaigns, agent_sessions, business_profiles
 
 ## Infrastructure
 
-* Docker
-* Redis
-* Celery
+* Optional: Redis + Celery (async queue)
+* FastAPI BackgroundTasks (default async execution)
 
 ## Deployment
 
 * Vercel (frontend)
-* Railway / AWS (backend)
+* Railway (backend)
 
 ---
 
@@ -78,37 +81,49 @@ Become the default AI infrastructure layer for service-based businesses.
 
 ## Purpose
 
-Central brain that manages all agents.
+Central brain that manages all agents through a plan-dispatch-evaluate loop.
 
 ## Responsibilities
 
-* Interpret user intent
-* Break tasks into steps
-* Assign tasks to agents
-* Aggregate responses
+* Interpret user intent via LLM planner
+* Break tasks into steps (Task objects)
+* Assign tasks to specialized agents
+* Retry failed tasks (iterative, max 2 retries)
+* Evaluate batch results against goal criteria
+* Enforce security policy (permissions, rate limits, budget)
+* Inject business context into planning
 
 ## Interface
 
 Input:
-{
-"user_id": string,
-"request": string
-}
+```python
+orchestrator.run(
+    request: str,                          # Natural-language mission
+    business_context: Optional[str] = None # Company profile for context injection
+)
+```
 
 Output:
+```python
 {
-"status": string,
-"result": any
+    "status": "goal_met" | "max_steps_reached" | "max_failures_reached" | "budget_exceeded",
+    "run_id": str,
+    "total_cost": float,
+    "cost_breakdown": Dict[str, float],
+    "logs": List[Dict],
+    "memory": List[Dict]   # Full execution history (all tasks)
 }
+```
 
 ## Core Loop
 
-1. Parse request
-2. Classify intent
-3. Generate task plan
-4. Dispatch tasks
-5. Collect results
-6. Return response
+1. Parse request (prepend business context if provided)
+2. Generate task plan via LLMPlanner
+3. Dispatch tasks to registered agents
+4. Execute tools with security checks
+5. Evaluate batch results against goal
+6. Replan if needed (up to max_steps)
+7. Return aggregated results
 
 ---
 
@@ -116,41 +131,37 @@ Output:
 
 ## Agent Template
 
-Each agent must implement:
+Each agent extends `BaseAgent` and receives an injected `LLMProvider`:
 
+```python
 class BaseAgent:
-def **init**(self, tools, memory):
-pass
+    def __init__(self, name, tools, memory, logger, llm_provider=None):
+        ...
 
-```
-def run(self, task):
-    pass
-```
+    def call_llm(self, task: Task) -> Dict[str, Any]:
+        """Query LLM for tool-call decision (with code fence stripping)."""
 
----
+    def run(self, task: Task) -> TaskResult:
+        """Execute: LLM decision → security check → tool execution → result."""
+```
 
 ## Agents
 
 ### Sales Agent
-
-* Lead scraping
-* Lead scoring
-* Outreach
+* Default tool: `find_leads_tool`
+* LLM-powered B2B lead research and ICP scoring
 
 ### Marketing Agent
-
-* Copy generation
-* Campaign creation
+* Default tool: `generate_copy_tool`
+* LLM-powered copywriting (email, LinkedIn, ads)
 
 ### Support Agent
-
-* Chat responses
-* Knowledge retrieval
+* Default tool: `search_knowledge_base`
+* LLM-powered knowledge queries with confidence scoring
 
 ### Ops Agent
-
-* Scheduling
-* Workflow automation
+* Default tools: `schedule_task`, `run_workflow`
+* LLM-powered scheduling and workflow automation
 
 ---
 
@@ -158,23 +169,30 @@ def run(self, task):
 
 ## Purpose
 
-Standardized way for agents to execute actions
+Standardized way for agents to execute actions with validation and cost tracking.
 
 ## Tool Schema
 
-{
-"name": "string",
-"description": "string",
-"input_schema": {},
-"function": callable
-}
+```python
+Tool(
+    name: str,
+    schema: Dict[str, type],   # Pydantic-validated payload schema
+    function: Callable,
+    cost_estimate: float = 0.01
+)
+```
 
-## Example Tools
+## Registered Tools
 
-* scrape_linkedin
-* send_email
-* get_maps_data
-* generate_copy
+| Tool | Cost | Description |
+|------|------|-------------|
+| `find_leads_tool` | $0.02 | LLM-powered lead research with ICP scoring |
+| `generate_copy_tool` | $0.01 | LLM-powered B2B copywriting |
+| `search_knowledge_base` | $0.005 | LLM-powered support/knowledge queries |
+| `schedule_task` | $0.005 | LLM-powered task scheduling |
+| `run_workflow` | $0.01 | LLM-powered workflow execution |
+
+All tools call `claude-haiku-4-5-20251001` when `ANTHROPIC_API_KEY` is set, with hardcoded mock fallbacks when it is not. LLM responses are stripped of markdown code fences before JSON parsing.
 
 ---
 
@@ -182,51 +200,48 @@ Standardized way for agents to execute actions
 
 ## Types of Memory
 
-### 1. Structured Memory
+### 1. Execution Memory
+* Full task/result history per run
+* `get_context()` returns last 5 entries (for LLM context windows)
+* `history` contains all entries (used in run results and lead extraction)
 
-* Users
-* Leads
-* Campaigns
+### 2. Business Profile Memory
+* Per-user company context (company name, ICP, target industries, etc.)
+* Injected into every orchestrator run as `[BUSINESS CONTEXT]` block
+* Persisted via API (`PUT /profile/{user_id}`) with localStorage fallback
 
-### 2. Vector Memory
-
-* Embeddings
-* Semantic search
-
-### 3. Session Memory
-
-* Conversation state
+### 3. Structured Data
+* Leads — extracted from tool results and persisted to Supabase
+* Campaigns — created via API
+* Agent Sessions — run logs with cost, duration, status
 
 ---
 
-# 8. DATABASE SCHEMA (SIMPLIFIED)
+# 8. DATABASE SCHEMA
 
 ## Tables
 
-users
+### leads
+* id, full_name, email, phone, company_name, role
+* inquiry_type, message, employee_count, monthly_lead_volume
+* project_types, avg_project_budget, current_location
+* icp_score (0-100), qualification_status, qualification_rationale
+* qualification_factors, source, created_at, updated_at
 
-* id
-* email
-* created_at
+### campaigns
+* id, name, status, created_at, updated_at
 
-leads
+### agent_sessions
+* id, run_id, user_id, lead_id, agent_type
+* status ("completed" | "failed"), input_data, output_data
+* reasoning_trace, cost_usd, input_tokens, output_tokens
+* model_used, duration_ms, steps_taken, started_at, completed_at
 
-* id
-* name
-* score
-* source
-
-campaigns
-
-* id
-* name
-* status
-
-logs
-
-* id
-* action
-* timestamp
+### business_profiles
+* id, user_id (unique), company_name, what_we_do
+* icp, target_industries, company_size, geography
+* lead_signals, value_proposition, tone
+* created_at, updated_at
 
 ---
 
@@ -234,20 +249,25 @@ logs
 
 ## Goals
 
-* Prevent misuse
-* Control costs
-* Ensure safe execution
+* Prevent misuse via per-agent tool permissions
+* Control costs via budget enforcement
+* Ensure safe execution via rate limiting
 
 ## Features
 
-* Tool permissions
-* Input validation
-* Rate limiting
-* Audit logs
+* **Tool permissions** — `allowed_tools: {agent_name: [tool_names]}`
+* **Rate limiting** — `rate_limits: {agent_name: max_calls}`
+* **Budget enforcement** — `budget_limit: float` (total cost cap)
+* **Input validation** — Pydantic schema validation on all tool payloads
+* **Audit logs** — Structured logging of every agent action
 
-## Flow
+## Authorization Flow
 
-Agent request → Validate → Approve → Execute → Log
+```
+Agent request → Check budget → Check permission → Check rate limit → Execute → Log
+```
+
+`SecurityPolicy.allow_all()` factory provides a wide-open dev policy.
 
 ---
 
@@ -255,46 +275,68 @@ Agent request → Validate → Approve → Execute → Log
 
 ## Endpoints
 
-POST /agent/run
-GET /leads
-POST /campaigns
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/agent/run` | Dispatch async orchestrator run (returns `{status, run_id}`) |
+| `GET` | `/agent/run/status/{run_id}` | Poll for run result |
+| `POST` | `/agent/run/async` | Queue via Celery (if configured) |
+| `GET` | `/agent/run/{task_id}` | Poll Celery task status |
+| `GET` | `/leads` | List leads (optional `min_score`, `limit`, `offset`) |
+| `POST` | `/campaigns` | Create campaign |
+| `GET` | `/campaigns` | List campaigns |
+| `GET` | `/profile/{user_id}` | Get business profile |
+| `PUT` | `/profile/{user_id}` | Create/update business profile |
+| `GET` | `/runs` | List mission history for a user |
+| `GET` | `/health` | Health check |
 
 ## Auth
 
-* JWT-based
+* `X-API-Key` header validated against `API_SECRET_KEY` env var
+* Skipped in development when `API_SECRET_KEY` is not set
+
+## CORS
+
+* Origins restricted via `ALLOWED_ORIGINS` env var (comma-separated)
+* Defaults to `http://localhost:5173`
 
 ---
 
 # 11. FRONTEND SPEC
 
-## Pages
+## Views (Single-Page, Tab-Switched)
 
-* Dashboard
-* Chat Interface
-* Leads Manager
-* Campaign Manager
+* **Mission** — Command input, processing log animation, task result display
+* **Leads** — Data table with ICP scores, fit badges, score filter
+* **Campaigns** — Data table with status badges
+* **History** — Past mission runs with status, cost, timestamps
+* **Profile** — Business profile form (Identity, Target Market, Lead Intelligence)
 
-## Components
+## Key Features
 
-* Chat window
-* Data tables
-* Forms
+* Persistent user identity (UUID in localStorage)
+* Business profile with API persistence + localStorage fallback
+* Async mission execution with 2s polling and processing log animation
+* Mission templates for common use cases
+* Profile completeness indicator (amber dot on tab)
 
 ---
 
 # 12. EVENT BUS / TASK QUEUE
 
-## Purpose
-
-Decouple agents
-
 ## Implementation
 
-* Redis Queue
+* **Primary**: FastAPI `BackgroundTasks` with in-memory run store (thread-safe, TTL eviction)
+* **Optional**: Redis + Celery (`POST /agent/run/async`) for distributed workers
 
 ## Pattern
 
-Producer → Queue → Consumer
+```
+POST /agent/run → dispatch background task → return run_id
+Client polls GET /agent/run/status/{run_id} every 2s
+Background task: orchestrator.run() → persist leads → log session → write result
+```
+
+Run store entries are evicted after 1 hour (only finished entries; running entries are exempt).
 
 ---
 
@@ -302,34 +344,41 @@ Producer → Queue → Consumer
 
 ## Steps
 
-1. Build Docker image
-2. Deploy backend
-3. Deploy frontend
-4. Connect database
+1. Frontend: `npm run build` → deploy to Vercel
+2. Backend: deploy to Railway with env vars
+3. Database: Supabase project with schema migrations
+4. Environment: `ANTHROPIC_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `API_SECRET_KEY`, `ALLOWED_ORIGINS`
 
 ---
 
 # 14. TESTING STRATEGY
 
-## Unit Tests
+## Unit Tests (`test_orchestrator.py`)
 
-* Tools
-* Agents
+* Evaluator batch-based evaluation (all_success, any_success, empty)
+* Iterative retry loop (single memory entry, flakey recovery)
+* LLM provider injection (swappable behavior)
+* Security enforcement (permissions, rate limits, budget)
+* Full end-to-end run
 
-## Integration Tests
+## API Tests (`test_api.py`)
 
-* Full workflows
+* Health check
+* Async agent dispatch + polling
+* Lead persistence after run
+* Lead filtering with seeded data
+* Campaign CRUD
+* Input validation (422 on missing fields)
 
-## Load Testing
-
-* Simulate multiple users
-
+---
 
 # 15. FUTURE EXPANSION
 
 * MCP compatibility
 * Plugin marketplace
 * Industry-specific templates
+* Real-time WebSocket updates (replace polling)
+* Multi-user auth (Clerk / Supabase Auth)
 
 ---
 

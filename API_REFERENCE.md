@@ -1,6 +1,6 @@
 # API Reference — ProPlan Agent Orchestrator v2.0
 
-> Full class and method reference for [`proplanOrchestrator.py`](file:///c:/Users/TheoTorku/OneDrive/Desktop/march%202026/Proplan_Operating_System/proplanOrchestrator.py).
+> Full class and method reference for [`proplanOrchestrator.py`](proplanOrchestrator.py), [`api.py`](api.py), [`database.py`](database.py), and [`llm.py`](llm.py).
 
 ---
 
@@ -85,7 +85,7 @@ Determines whether a goal has been met based on the **current batch** of results
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `evaluate` | `(goal: Goal, batch_results: List[TaskResult]) → str` | Returns `"complete"` if criteria are met, `"continue common"` otherwise. |
+| `evaluate` | `(goal: Goal, batch_results: List[TaskResult]) → str` | Returns `"complete"` if criteria are met, `"continue"` otherwise. |
 
 **Evaluation modes:**
 - `"all_success"` — Every result in the batch must be successful.
@@ -100,11 +100,17 @@ Determines whether a goal has been met based on the **current batch** of results
 
 Stores task/result history for context retrieval and failure tracking.
 
+| Field | Type | Description |
+|-------|------|-------------|
+| `history` | `List[Dict[str, Any]]` | Full list of all task-result pairs. |
+
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `add` | `(task: Task, result: TaskResult) → None` | Append a task-result pair to history. |
-| `get_context` | `() → List[Dict[str, Any]]` | Return the last 5 history entries. |
+| `get_context` | `() → List[Dict[str, Any]]` | Return the last 5 history entries (for LLM context injection). |
 | `failure_count` | `() → int` | Count total failures across all history. |
+
+> **Note:** `run()` returns `self.memory.history` (full list), not `get_context()` (last 5). `get_context()` is only used when injecting memory into LLM prompts.
 
 ---
 
@@ -116,7 +122,7 @@ Abstract interface for LLM backends. Any class implementing `complete()` satisfi
 
 ```python
 class LLMProvider(Protocol):
-    def complete(self, prompt: str, context: Dict[str, Any] = None) -> str: ...
+    def complete(self, prompt: str, context: Optional[Dict[str, Any]] = None) -> str: ...
 ```
 
 ---
@@ -135,6 +141,30 @@ Returns a fixed tool-call JSON. Used as the default LLM for agents.
 ### `MockPlannerLLM`
 
 Returns a fixed multi-agent plan JSON. Used as the default LLM for the planner.
+
+---
+
+### `AnthropicPlannerProvider` (in `llm.py`)
+
+Calls Claude Sonnet for plan generation. Strips code fences before JSON parsing.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `api_key` | `str` | *required* | Anthropic API key. |
+| `model` | `str` | `"claude-sonnet-4-20250514"` | Model ID. |
+
+---
+
+### `AnthropicAgentProvider` (in `llm.py`)
+
+Calls Claude Sonnet for agent tool-call decisions.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `api_key` | `str` | *required* | Anthropic API key. |
+| `agent_name` | `str` | *required* | Agent identity for system prompt. |
+| `available_tools` | `str` | *required* | Comma-separated tool names. |
+| `model` | `str` | `"claude-sonnet-4-20250514"` | Model ID. |
 
 ---
 
@@ -200,6 +230,17 @@ Manages tool registration, validation, and execution.
 
 ---
 
+### LLM Tool Helper
+
+Module-level cached Anthropic client (`_get_tool_client()`) used by all tool functions. Thread-safe initialization via double-checked locking.
+
+| Function | Description |
+|----------|-------------|
+| `_llm_tool_call(system, user, max_tokens)` | Call Claude Haiku for tool execution. Returns `None` if no API key or on failure. |
+| `_strip_code_fence(text)` | Remove markdown `` ```json ``` `` fences from LLM output before JSON parsing. |
+
+---
+
 ## Agents
 
 ### `BaseAgent`
@@ -208,8 +249,8 @@ Base class for all agents. Injects an `LLMProvider` for decision-making.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `call_llm` | `(task: Task) → Dict[str, Any]` | Query the LLM provider for a tool-call decision. |
-| `run` | `(task: Task) → TaskResult` | Execute the full agent cycle: LLM → tool → result. |
+| `call_llm` | `(task: Task) → Dict[str, Any]` | Query the LLM provider for a tool-call decision. Strips code fences before parsing. |
+| `run` | `(task: Task) → TaskResult` | Execute the full agent cycle: LLM → security check → tool → result. |
 
 ### `SalesAgent(BaseAgent)`
 
@@ -218,6 +259,14 @@ Default LLM: `MockAgentLLM("find_leads_tool", {"query": "find leads"})`
 ### `MarketingAgent(BaseAgent)`
 
 Default LLM: `MockAgentLLM("generate_copy_tool", {"input": "generate copy"})`
+
+### `SupportAgent(BaseAgent)`
+
+Default LLM: `MockAgentLLM("search_knowledge_base", {"query": "support query"})`
+
+### `OpsAgent(BaseAgent)`
+
+Default LLM: `MockAgentLLM("schedule_task", {"task_name": "ops task"})`
 
 ---
 
@@ -240,8 +289,8 @@ Generates task plans from user requests using an LLM provider.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `call_llm` | `(request: str, context: Dict = None) → str` | Delegate to the LLM provider. |
-| `plan` | `(request: str, context: Dict = None) → List[Task]` | Parse LLM output into `Task` objects. |
+| `call_llm` | `(request: str, context: Optional[Dict] = None) → str` | Delegate to the LLM provider. |
+| `plan` | `(request: str, context: Optional[Dict] = None) → List[Task]` | Parse LLM output into `Task` objects. |
 
 ---
 
@@ -251,25 +300,121 @@ Generates task plans from user requests using an LLM provider.
 
 Central entry point. Manages the full plan → dispatch → evaluate loop.
 
-| Constructor | `Orchestrator(security_policy: Optional[SecurityPolicy] = None)` |
-|-------------|--------------------------------------------------------------|
+| Constructor | `Orchestrator(security_policy: Optional[SecurityPolicy] = None, planner_llm: Optional[LLMProvider] = None)` |
+|-------------|--------------------------------------------------------------------------------------------------------------|
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `register_tool` | `(tool: Tool) → None` | Register a tool. |
 | `register_agent` | `(agent_cls: type, llm_provider: Optional[LLMProvider] = None) → None` | Instantiate and register an agent class. |
 | `execute_task` | `(task: Task) → TaskResult` | Execute a task with iterative retries. Only the final result is stored. |
-| `run` | `(request: str) → Dict[str, Any]` | Full orchestration loop. Returns status, cost, logs, and memory. |
+| `run` | `(request: str, business_context: Optional[str] = None) → Dict[str, Any]` | Full orchestration loop. Returns status, cost, logs, and full memory. |
 
 **Return value of `run()`:**
 
 ```python
 {
-    "status": "completed",
+    "status": "goal_met" | "max_steps_reached" | "max_failures_reached" | "budget_exceeded",
     "run_id": str,
     "total_cost": float,
     "cost_breakdown": Dict[str, float],
     "logs": List[Dict],
-    "memory": List[Dict]
+    "memory": List[Dict]   # Full execution history (self.memory.history)
 }
 ```
+
+---
+
+## FastAPI Endpoints (`api.py`)
+
+### `POST /agent/run`
+
+Dispatch an async orchestrator run. Returns immediately.
+
+**Request:** `AgentRunRequest`
+```json
+{ "user_id": "string", "request": "string", "business_context": "string | null" }
+```
+
+**Response:** `AgentRunDispatchResponse`
+```json
+{ "status": "running", "run_id": "uuid" }
+```
+
+### `GET /agent/run/status/{run_id}`
+
+Poll for run result.
+
+**Response:**
+```json
+{ "status": "running" | "completed" | "failed", "result": {...} | null, "error": "string" | null }
+```
+
+### `GET /leads`
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `min_score` | `float` | `None` | Minimum ICP score filter. |
+| `limit` | `int` | `None` | Max results (1-500). |
+| `offset` | `int` | `0` | Pagination offset. |
+
+### `POST /campaigns`
+
+```json
+{ "name": "string", "status": "draft" }
+```
+
+### `GET /campaigns`
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | `int` | `None` | Max results (1-500). |
+| `offset` | `int` | `0` | Pagination offset. |
+
+### `GET /profile/{user_id}`
+
+Returns the saved `BusinessProfileModel` or 404.
+
+### `PUT /profile/{user_id}`
+
+Create or update a business profile. Body: `BusinessProfileModel`.
+
+### `GET /runs`
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `user_id` | `str` | *required* | Filter by user. |
+| `limit` | `int` | `20` | Max results (1-100). |
+
+### `GET /health`
+
+Returns `{ "status": "healthy", "timestamp": float }`.
+
+---
+
+## Database Models (`database.py`)
+
+### `LeadModel`
+Lead record matching the Supabase `leads` table. Key fields: `full_name`, `email`, `company_name`, `icp_score` (0-100), `qualification_status`, `source`.
+
+### `CampaignModel`
+Campaign record: `name`, `status` (default `"draft"`).
+
+### `AgentSessionModel`
+Run log: `run_id`, `user_id`, `agent_type`, `status`, `cost_usd`, `started_at`, `completed_at`.
+
+### `BusinessProfileModel`
+Per-user business context: `company_name`, `what_we_do`, `icp`, `target_industries`, `company_size`, `geography`, `lead_signals`, `value_proposition`, `tone`.
+
+### Database Providers
+
+| Provider | Use | Description |
+|----------|-----|-------------|
+| `InMemoryDatabase` | Development | Thread-safe dict-based storage. |
+| `SupabaseDatabase` | Production | Supabase client with full CRUD. |
+
+Factory: `get_database()` returns `SupabaseDatabase` if `SUPABASE_URL`/`SUPABASE_KEY` are set, else `InMemoryDatabase`.
+
+### `extract_leads_from_memory(memory)`
+
+Parses full execution memory and extracts discovered leads (maps `name`/`score` → `full_name`/`icp_score`).

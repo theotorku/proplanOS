@@ -7,7 +7,16 @@ orchestrator's LLMProvider protocol.
 
 import json
 import logging
+import re
 from typing import Dict, Any, Optional
+
+_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```\s*$", re.DOTALL)
+
+
+def _strip_code_fence(text: str) -> str:
+    """Remove surrounding markdown code fences if present."""
+    m = _CODE_FENCE_RE.match(text.strip())
+    return m.group(1).strip() if m else text.strip()
 
 try:
     from anthropic import Anthropic
@@ -47,7 +56,7 @@ class AnthropicPlannerProvider:
         messages.append(
             {"role": "user", "content": f"Generate a plan for this request: {prompt}"})
 
-        logging.info(f"Anthropic Planner | Calling {self.model}...")
+        logging.info("Anthropic Planner | Calling %s...", self.model)
         response = self.client.messages.create(
             model=self.model,
             max_tokens=1024,
@@ -55,7 +64,7 @@ class AnthropicPlannerProvider:
             messages=messages,
         )
 
-        raw = response.content[0].text
+        raw = _strip_code_fence(response.content[0].text)
         try:
             data = json.loads(raw)
             # The orchestrator's LLMPlanner expects a JSON array string directly `[{}, {}]`
