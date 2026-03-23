@@ -22,6 +22,9 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
+# Model IDs — centralised so they're easy to update
+TOOL_MODEL = "claude-haiku-4-5-20251001"
+
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```\s*$", re.DOTALL)
 
 
@@ -729,7 +732,7 @@ def _llm_tool_call(system: str, user: str, max_tokens: int = 1024) -> Optional[s
         return None
     try:
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=TOOL_MODEL,
             max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": user}],
@@ -764,7 +767,15 @@ def find_leads_tool(payload):
         try:
             # Strip markdown code fences if present
             clean = _strip_code_fence(result)
-            return json.loads(clean)
+            parsed = json.loads(clean)
+            if isinstance(parsed, list):
+                return parsed
+            # LLM sometimes wraps in {"leads": [...]} — unwrap if possible
+            if isinstance(parsed, dict):
+                for v in parsed.values():
+                    if isinstance(v, list):
+                        return v
+            logger.warning("find_leads_tool: LLM returned non-list JSON, using fallback")
         except json.JSONDecodeError:
             logger.warning("find_leads_tool: JSON parse failed, using fallback")
 

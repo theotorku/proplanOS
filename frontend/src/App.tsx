@@ -2,6 +2,13 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Terminal, Activity, Shield, Zap, CheckCircle, XCircle, RefreshCw, Users, Megaphone, Settings, Save } from 'lucide-react';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+const API_KEY = import.meta.env.VITE_API_KEY ?? '';
+
+function apiHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const h: Record<string, string> = { ...extra };
+  if (API_KEY) h['X-API-Key'] = API_KEY;
+  return h;
+}
 
 // ─── Types ──────────────────────────────────────────────────────
 type View = 'mission' | 'leads' | 'campaigns' | 'profile' | 'history';
@@ -228,7 +235,7 @@ export default function App() {
   // Health check — poll every 30s
   useEffect(() => {
     const check = () => {
-      fetch(`${API_BASE_URL}/health`)
+      fetch(`${API_BASE_URL}/health`, { headers: apiHeaders() })
         .then(r => setSystemOnline(r.ok))
         .catch(() => setSystemOnline(false));
     };
@@ -265,7 +272,7 @@ export default function App() {
     try {
       const params = new URLSearchParams({ limit: '100' });
       if (score > 0) params.set('min_score', String(score));
-      const res = await fetch(`${API_BASE_URL}/leads?${params}`);
+      const res = await fetch(`${API_BASE_URL}/leads?${params}`, { headers: apiHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setLeads(data.leads ?? data ?? []);
@@ -280,7 +287,7 @@ export default function App() {
     setRunsLoading(true);
     setRunsError(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/runs?user_id=${userId}&limit=20`);
+      const res = await fetch(`${API_BASE_URL}/runs?user_id=${userId}&limit=20`, { headers: apiHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setRuns(await res.json());
     } catch (err: unknown) {
@@ -294,7 +301,7 @@ export default function App() {
     setCampaignsLoading(true);
     setCampaignsError(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/campaigns?limit=100`);
+      const res = await fetch(`${API_BASE_URL}/campaigns?limit=100`, { headers: apiHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setCampaigns(data.campaigns ?? data ?? []);
@@ -307,7 +314,7 @@ export default function App() {
 
   // Load profile from API on mount (falls back to localStorage if unavailable)
   useEffect(() => {
-    fetch(`${API_BASE_URL}/profile/${userId}`)
+    fetch(`${API_BASE_URL}/profile/${userId}`, { headers: apiHeaders() })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data) {
@@ -345,7 +352,7 @@ export default function App() {
       // 1. Dispatch
       const res = await fetch(`${API_BASE_URL}/agent/run`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           user_id: userId,
           request: prompt,
@@ -358,7 +365,7 @@ export default function App() {
       // 2. Poll every 2s for up to 3 minutes
       for (let i = 0; i < 90; i++) {
         await new Promise(r => setTimeout(r, 2000));
-        const poll = await fetch(`${API_BASE_URL}/agent/run/status/${run_id}`);
+        const poll = await fetch(`${API_BASE_URL}/agent/run/status/${run_id}`, { headers: apiHeaders() });
         if (!poll.ok) throw new Error(`Poll failed: HTTP ${poll.status}`);
         const data = await poll.json();
         if (data.status === 'completed') { setResponse(data.result); return; }
@@ -379,7 +386,7 @@ export default function App() {
     try {
       await fetch(`${API_BASE_URL}/profile/${userId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ ...profileDraft, user_id: userId }),
       });
     } catch { /* silently fail — localStorage already saved */ }

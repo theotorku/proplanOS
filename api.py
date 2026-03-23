@@ -339,7 +339,7 @@ def upsert_profile(user_id: str, body: BusinessProfileModel):
     return db.upsert_profile(body)
 
 
-@app.get("/runs", tags=["History"], dependencies=[Depends(verify_api_key)])
+@app.get("/runs", tags=["History"], response_model=list[AgentSessionModel], dependencies=[Depends(verify_api_key)])
 def list_runs(
     user_id: str = Query(..., description="User ID to filter runs"),
     limit: int = Query(20, ge=1, le=100),
