@@ -216,11 +216,26 @@ export default function App() {
   const [campaignsLoading, setCampaignsLoading] = useState(false);
   const [campaignsError, setCampaignsError] = useState<string | null>(null);
 
+  // System health
+  const [systemOnline, setSystemOnline] = useState(true);
+
   // Validation state
   const [cmdShake, setCmdShake] = useState(false);
 
   const outputRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLInputElement>(null);
+
+  // Health check — poll every 30s
+  useEffect(() => {
+    const check = () => {
+      fetch(`${API_BASE_URL}/health`)
+        .then(r => setSystemOnline(r.ok))
+        .catch(() => setSystemOnline(false));
+    };
+    check();
+    const iv = setInterval(check, 30_000);
+    return () => clearInterval(iv);
+  }, []);
 
   // Auto-scroll
   useEffect(() => {
@@ -383,11 +398,15 @@ export default function App() {
 
   const useTemplate = (t: string) => {
     setPrompt(t);
-    // Select all text so next keystroke replaces the template
-    setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }, 0);
+    // Select all text so next keystroke replaces the template.
+    // requestAnimationFrame waits for React's re-render to flush before selecting.
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(0, el.value.length);
+      }
+    });
   };
 
   // ── Sidebar stats ──────────────────────────────────────────────
@@ -405,19 +424,25 @@ export default function App() {
       {/* ── Header ── */}
       <header className="app-header">
         <div className="header-left">
-          <div className="header-brand">
+          <button
+            type="button"
+            className="header-brand"
+            onClick={() => { setView('mission'); resetMission(); }}
+            aria-label="Reset to mission home"
+          >
             <Terminal size={14} className="header-icon" />
             <span className="brand-text">PROPLAN <span className="brand-slash">//</span> OS</span>
             <span className="brand-version">v2.0</span>
-          </div>
+          </button>
           <div className="header-separator" />
           {/* View tabs */}
-          <nav className="view-tabs">
+          <nav className="view-tabs" aria-label="Main navigation">
             {(['mission', 'leads', 'campaigns', 'history', 'profile'] as View[]).map(v => (
               <button
                 key={v}
+                type="button"
                 className={`view-tab ${view === v ? 'view-tab-active' : ''}`}
-                onClick={() => setView(v)}
+                onClick={() => { setView(v); if (v === 'mission' && view === 'mission') resetMission(); }}
               >
                 {v === 'mission'   && <Terminal  size={11} />}
                 {v === 'leads'     && <Users      size={11} />}
@@ -434,11 +459,11 @@ export default function App() {
         </div>
 
         <div className="header-status">
-          <span className="status-dot" />
-          <span className="status-label">SYSTEM ONLINE</span>
+          <span className={`status-dot ${systemOnline ? '' : 'status-dot-err'}`} />
+          <span className="status-label">{systemOnline ? 'SYSTEM ONLINE' : 'SYSTEM DEGRADED'}</span>
           <span className="status-pipe">|</span>
           <Activity size={11} />
-          <span className="status-label">4 AGENTS ACTIVE</span>
+          <span className="status-label">{systemOnline ? '4 AGENTS ACTIVE' : 'AGENTS UNAVAILABLE'}</span>
         </div>
       </header>
 
@@ -446,7 +471,7 @@ export default function App() {
       <div className="app-body">
 
         {/* ── Sidebar ── */}
-        <aside className="sidebar">
+        <aside className="sidebar" aria-label="System dashboard">
           <section className="sidebar-section">
             <p className="sidebar-title">MISSION CONTROL</p>
             <div className="sidebar-stat">
@@ -468,11 +493,17 @@ export default function App() {
             {Object.entries(AGENTS).map(([key, a]) => (
               <div key={key} className="agent-row">
                 <span className="agent-badge"
-                  style={{ color: a.color, borderColor: a.color + '44', backgroundColor: a.color + '12' }}>
+                  style={{ color: a.color, borderColor: a.color + '44', backgroundColor: a.color + '12' }}
+                  aria-label={`${a.label} agent`}>
                   {a.code}
                 </span>
                 <span className="agent-name">{a.label}</span>
-                <span className="agent-pip" style={{ backgroundColor: a.color }} />
+                <span
+                  className="agent-pip"
+                  style={{ backgroundColor: a.color }}
+                  title={`${a.label} — active`}
+                  aria-label={`${a.label} status: active`}
+                />
               </div>
             ))}
           </section>
@@ -607,7 +638,7 @@ export default function App() {
         </aside>
 
         {/* ── Main ── */}
-        <main className="main-area">
+        <main className="main-area" aria-label="Content area">
 
           {/* ════ MISSION VIEW ════ */}
           {view === 'mission' && (
@@ -625,7 +656,7 @@ export default function App() {
                     <div className="templates-wrap">
                       <p className="templates-label">─── MISSION TEMPLATES ───</p>
                       {TEMPLATES.map((t, i) => (
-                        <button key={t} className="template-btn" onClick={() => useTemplate(t)}>
+                        <button key={t} type="button" className="template-btn" onClick={() => useTemplate(t)}>
                           <span className="template-num">{String(i + 1).padStart(2, '0')}</span>
                           <span className="template-text">{t}</span>
                           <Zap size={11} className="template-zap" />
@@ -662,7 +693,7 @@ export default function App() {
                       <span className="log-evt c-error">MISSION FAILED</span>
                     </div>
                     <div className="error-box"><strong>ERR:</strong> {missionError}</div>
-                    <button className="reset-btn" onClick={resetMission}>
+                    <button type="button" className="reset-btn" onClick={resetMission}>
                       <RefreshCw size={11} /> NEW MISSION
                     </button>
                   </div>
@@ -742,7 +773,7 @@ export default function App() {
                       </div>
                     )}
 
-                    <button className="reset-btn" onClick={resetMission}>
+                    <button type="button" className="reset-btn" onClick={resetMission}>
                       <RefreshCw size={11} /> NEW MISSION
                     </button>
                   </div>
@@ -755,6 +786,8 @@ export default function App() {
                   <span className="cmd-prompt">[MISSION]&gt;</span>
                   <input
                     ref={inputRef}
+                    id="mission-input"
+                    name="mission"
                     type="text"
                     value={prompt}
                     onChange={e => setPrompt(e.target.value)}
@@ -763,11 +796,12 @@ export default function App() {
                     disabled={isRunning}
                     autoComplete="off"
                     spellCheck={false}
+                    aria-label="Mission objective"
                   />
-                  <button type="submit" disabled={isRunning || !prompt.trim()} className="cmd-submit">
+                  <button type="submit" disabled={isRunning} className="cmd-submit">
                     {isRunning
                       ? <span className="blink">EXEC…</span>
-                      : <><span>DEPLOY</span><Send size={11} /></>}
+                      : <><span>DEPLOY</span><Send size={11} aria-hidden="true" /></>}
                   </button>
                 </form>
                 <div className="cmd-hint">
@@ -791,7 +825,7 @@ export default function App() {
                     <select
                       className="filter-select"
                       value={minScore}
-                      onChange={e => { setMinScore(+e.target.value); fetchLeads(+e.target.value); }}
+                      onChange={e => setMinScore(+e.target.value)}
                     >
                       <option value={0}>ALL</option>
                       <option value={40}>40+</option>
@@ -799,7 +833,7 @@ export default function App() {
                       <option value={90}>90+</option>
                     </select>
                   </label>
-                  <button className="toolbar-btn" onClick={() => fetchLeads()} disabled={leadsLoading}>
+                  <button type="button" className="toolbar-btn" onClick={() => fetchLeads()} disabled={leadsLoading}>
                     <RefreshCw size={11} className={leadsLoading ? 'spin' : ''} />
                     REFRESH
                   </button>
@@ -879,7 +913,7 @@ export default function App() {
                   <span className="toolbar-count">{campaigns.length} RECORDS</span>
                 </div>
                 <div className="toolbar-right">
-                  <button className="toolbar-btn" onClick={fetchCampaigns} disabled={campaignsLoading}>
+                  <button type="button" className="toolbar-btn" onClick={fetchCampaigns} disabled={campaignsLoading}>
                     <RefreshCw size={11} className={campaignsLoading ? 'spin' : ''} />
                     REFRESH
                   </button>
@@ -945,7 +979,7 @@ export default function App() {
                   <span className="toolbar-count">{runs.length} RUNS</span>
                 </div>
                 <div className="toolbar-right">
-                  <button className="toolbar-btn" onClick={fetchRuns} disabled={runsLoading}>
+                  <button type="button" className="toolbar-btn" onClick={fetchRuns} disabled={runsLoading}>
                     <RefreshCw size={11} className={runsLoading ? 'spin' : ''} />
                     REFRESH
                   </button>
