@@ -334,13 +334,19 @@ class ToolRegistry:
 
     def validate(self, tool: Tool, payload: Dict[str, Any]) -> bool:
         """Validate payload types against a tool's Pydantic schema."""
+        ok, _ = self.validate_with_errors(tool, payload)
+        return ok
+
+    def validate_with_errors(self, tool: Tool, payload: Dict[str, Any]):
+        """Like validate() but also returns the Pydantic error list for retries."""
         try:
             tool.schema(**payload)
-            return True
+            return True, []
         except ValidationError as e:
+            errors = e.errors()
             self.logger.log("WARN", f"Validation failed for tool '{tool.name}'", {
-                            "errors": e.errors()})
-            return False
+                            "errors": errors})
+            return False, errors
 
     def execute(self, task_id: str, name: str, payload: Dict[str, Any], agent_name: str = "unknown") -> Any:
         """
@@ -397,15 +403,24 @@ class BaseAgent:
         self.llm_provider = llm_provider or MockAgentLLM(
             "find_leads_tool", {"query": "fallback"})
 
-    def call_llm(self, task: Task) -> Dict[str, Any]:
-        """Use the injected LLM provider to decide which tool to call."""
-        prompt = json.dumps({"action": task.action, "payload": task.payload})
+    def call_llm(self, task: Task, retry_hint: Optional[str] = None) -> Dict[str, Any]:
+        """Use the injected LLM provider to decide which tool to call.
+        retry_hint, when supplied, is appended to the prompt so the LLM can
+        repair its previous payload (e.g. after schema validation failed).
+        """
+        body = {"action": task.action, "payload": task.payload}
+        if retry_hint:
+            body["retry_hint"] = retry_hint
+        prompt = json.dumps(body)
         context = {"agent": self.name, "memory": self.memory.get_context()}
         raw = self.llm_provider.complete(prompt, context)
         return json.loads(_strip_code_fence(raw))
 
     def run(self, task: Task) -> TaskResult:
-        """Execute a task by consulting the LLM and dispatching a tool call."""
+        """Execute a task by consulting the LLM and dispatching a tool call.
+        On schema-validation failure we re-prompt the LLM once with the
+        Pydantic error list so it can correct its payload before we give up.
+        """
         try:
             self.logger.log("INFO", "Agent running", {
                             "agent": self.name, "task_id": task.id})
@@ -416,6 +431,23 @@ class BaseAgent:
 
             if tool_name not in self.tools.list_tools():
                 return TaskResult(task.id, False, error=f"Invalid tool: {tool_name}")
+
+            tool = self.tools.get(tool_name)
+            ok, errors = self.tools.validate_with_errors(tool, payload)
+            if not ok:
+                hint = (
+                    f"Your previous payload failed schema validation for tool "
+                    f"'{tool_name}'. Errors: {json.dumps(errors)}. "
+                    f"Re-emit the same tool call using ONLY the field names from "
+                    f"the example in the system prompt."
+                )
+                self.logger.log("INFO", "Retrying agent call with schema hint", {
+                                "task_id": task.id, "tool": tool_name})
+                decision = self.call_llm(task, retry_hint=hint)
+                tool_name = decision.get("tool")
+                payload = decision.get("payload", {})
+                if tool_name not in self.tools.list_tools():
+                    return TaskResult(task.id, False, error=f"Invalid tool: {tool_name}")
 
             result = self.tools.execute(
                 task.id, tool_name, payload, agent_name=self.name)

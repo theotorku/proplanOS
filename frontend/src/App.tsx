@@ -195,6 +195,23 @@ function statusColor(status: string): string {
   }
 }
 
+// goal_met = success; everything else terminal but non-success = partial.
+type RunOutcome = 'success' | 'partial';
+
+function runOutcome(status: string): RunOutcome {
+  return status === 'goal_met' ? 'success' : 'partial';
+}
+
+function runStatusLabel(status: string): string {
+  switch (status) {
+    case 'goal_met':            return 'MISSION COMPLETE';
+    case 'max_failures_reached': return 'MISSION STOPPED — MAX FAILURES';
+    case 'max_steps_reached':    return 'MISSION STOPPED — MAX STEPS';
+    case 'budget_exceeded':      return 'MISSION STOPPED — BUDGET EXCEEDED';
+    default:                     return `MISSION STOPPED — ${status.toUpperCase()}`;
+  }
+}
+
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('en-US', {
@@ -560,7 +577,9 @@ export default function App() {
               <p className="sidebar-title">LAST RUN</p>
               <div className="sidebar-stat">
                 <span className="stat-label">STATUS</span>
-                <span className="stat-value c-success">{response.status.toUpperCase()}</span>
+                <span className={`stat-value ${runOutcome(response.status) === 'success' ? 'c-success' : 'c-warn'}`}>
+                  {response.status.toUpperCase()}
+                </span>
               </div>
               <div className="sidebar-stat">
                 <span className="stat-label">TASKS</span>
@@ -745,13 +764,20 @@ export default function App() {
                   </div>
                 )}
 
-                {response && (
+                {response && (() => {
+                  const outcome = runOutcome(response.status);
+                  const succeeded = response.memory.filter(s => s.result.success).length;
+                  const failed = response.memory.length - succeeded;
+                  return (
                   <div className="log-feed">
                     <div className="log-header">
                       <span className="log-ts">{ts()}</span>
-                      <CheckCircle size={12} style={{ color: 'var(--success)' }} />
-                      <span className="log-evt c-success">
-                        MISSION COMPLETE — {response.memory.length} TASK{response.memory.length !== 1 ? 'S' : ''} EXECUTED
+                      {outcome === 'success'
+                        ? <CheckCircle size={12} style={{ color: 'var(--success)' }} />
+                        : <XCircle    size={12} style={{ color: 'var(--warn)' }} />}
+                      <span className={`log-evt ${outcome === 'success' ? 'c-success' : 'c-warn'}`}>
+                        {runStatusLabel(response.status)} — {succeeded}/{response.memory.length} TASK{response.memory.length !== 1 ? 'S' : ''} OK
+                        {failed > 0 ? ` · ${failed} FAILED` : ''}
                       </span>
                     </div>
 
@@ -849,7 +875,8 @@ export default function App() {
                       <RefreshCw size={11} /> NEW MISSION
                     </button>
                   </div>
-                )}
+                  );
+                })()}
               </div>
 
               {/* Command bar */}

@@ -309,19 +309,27 @@ def extract_leads_from_memory(memory: List[Dict[str, Any]]) -> List[LeadModel]:
     """
     Parse execution memory entries and extract any discovered leads.
 
-    Maps the orchestrator's tool output (name, score) to the Supabase
-    schema (full_name, icp_score).
+    Maps find_leads_tool output ({name, company, role, email, score, reason})
+    to the Supabase leads schema. company is required by the table's NOT NULL
+    constraint, so missing values fall back to "Unknown" rather than failing
+    the insert.
     """
     leads: List[LeadModel] = []
     for entry in memory:
         data = entry.get("result", {}).get("data")
-        if isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict) and "name" in item and "score" in item:
-                    leads.append(LeadModel(
-                        full_name=item["name"],
-                        icp_score=float(item["score"]),
-                        qualification_status="pending",
-                        source="agent"
-                    ))
+        if not isinstance(data, list):
+            continue
+        for item in data:
+            if not (isinstance(item, dict) and "name" in item and "score" in item):
+                continue
+            leads.append(LeadModel(
+                full_name=item["name"],
+                company_name=item.get("company") or "Unknown",
+                role=item.get("role"),
+                email=item.get("email"),
+                icp_score=float(item["score"]),
+                qualification_status="pending",
+                qualification_rationale=item.get("reason"),
+                source="agent",
+            ))
     return leads

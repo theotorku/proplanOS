@@ -75,6 +75,30 @@ class AnthropicPlannerProvider:
             return "[]"
 
 
+# Concrete payload examples for every tool the orchestrator registers. The
+# agent system prompt only embeds the examples for the tools that agent
+# actually owns — Claude was hallucinating field names (e.g. {"copy": "..."}
+# for generate_copy_tool) when given only a generic search example.
+TOOL_PAYLOAD_EXAMPLES: Dict[str, str] = {
+    "find_leads_tool":      '{"query": "B2B SaaS founders in NYC", "count": 5}',
+    "generate_copy_tool":   '{"input": "Cold outreach to a VP of Sales at a Series A SaaS company", "type": "email"}',
+    "search_knowledge_base": '{"query": "refund policy"}',
+    "schedule_task":        '{"task_name": "Follow up with lead #123", "due_date": "2026-04-25"}',
+    "run_workflow":         '{"workflow_name": "weekly_outreach", "steps": ["enrich", "send", "log"]}',
+}
+
+
+def _build_tool_examples(available_tools: str) -> str:
+    """Render a per-tool example list for the agent prompt."""
+    names = [t.strip() for t in available_tools.split(",") if t.strip()]
+    lines = []
+    for name in names:
+        example = TOOL_PAYLOAD_EXAMPLES.get(name)
+        if example:
+            lines.append(f'  - {name}: {{"tool": "{name}", "payload": {example}}}')
+    return "\n".join(lines) if lines else ""
+
+
 class AnthropicAgentProvider:
     """Anthropic Claude adapter for ProPlan specialized Agents."""
 
@@ -84,12 +108,14 @@ class AnthropicAgentProvider:
                 "Please install 'anthropic' to use Anthropic providers.")
         self.client = Anthropic(api_key=api_key)
         self.model = model
+        examples = _build_tool_examples(available_tools)
         self.system_prompt = (
             f"You are the {agent_name} agent for ProPlan OS. "
             f"You must accomplish the given task by choosing ONE of the following tools: {available_tools}. "
             "You must respond ONLY with a JSON object. "
             "It must contain exactly two keys: 'tool' (the string name of the tool) and 'payload' (a dictionary of arguments). "
-            "Example: {\"tool\": \"search_knowledge_base\", \"payload\": {\"query\": \"refund policy\"}}"
+            "Use ONLY the field names shown in the example below — do not invent or rename keys.\n"
+            f"Examples for your tools:\n{examples}"
         )
 
     def complete(self, prompt: str, context: Optional[Dict[str, Any]] = None) -> str:

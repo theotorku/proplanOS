@@ -137,12 +137,16 @@ def _run_orchestrator_bg(run_id: str, request: str, business_context: Optional[s
 
         session_status = "completed" if result["status"] == "goal_met" else "failed"
         try:
+            # NOTE: run_id is intentionally NOT set as a top-level column because
+            # the deployed Supabase agent_sessions table predates that column
+            # (PGRST204). It still travels in output_data so runs remain
+            # correlatable. Drop this workaround once
+            # migrations/0001_add_run_id_to_agent_sessions.sql is applied.
             db.log_run(AgentSessionModel(
-                run_id=run_id,
                 user_id=user_id,
                 agent_type="orchestrator",
                 status=session_status,
-                input_data={"user_id": user_id, "request": request},
+                input_data={"user_id": user_id, "request": request, "run_id": run_id},
                 output_data={"status": result["status"], "total_cost": result["total_cost"], "run_id": result["run_id"]},
                 cost_usd=result["total_cost"],
                 started_at=started_at,

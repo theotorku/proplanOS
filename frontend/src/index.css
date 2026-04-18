@@ -214,6 +214,7 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 
 .stat-value.c-accent  { color: var(--accent); }
 .stat-value.c-success { color: var(--success); }
+.stat-value.c-warn    { color: var(--warn); }
 .stat-value.mono-xs   { font-size: 9px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Agent rows */
@@ -380,6 +381,7 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 .log-evt      { font-weight: 700; letter-spacing: 0.12em; }
 .log-evt.c-accent  { color: var(--accent); }
 .log-evt.c-success { color: var(--success); }
+.log-evt.c-warn    { color: var(--warn); }
 .log-evt.c-error   { color: var(--error); }
 
 /* Mission input echo */
