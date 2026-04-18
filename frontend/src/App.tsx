@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Terminal, Activity, Shield, Zap, CheckCircle, XCircle, RefreshCw, Users, Megaphone, Settings, Save, Download } from 'lucide-react';
+import { Send, Terminal, Activity, Shield, Zap, CheckCircle, XCircle, RefreshCw, Users, Megaphone, Settings, Save, Download, MessageSquare } from 'lucide-react';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 const API_KEY = import.meta.env.VITE_API_KEY ?? '';
@@ -43,6 +43,7 @@ type BusinessProfile = {
   lead_signals: string;
   value_proposition: string;
   tone: string;
+  slack_webhook_url: string;
 };
 
 const EMPTY_PROFILE: BusinessProfile = {
@@ -55,6 +56,7 @@ const EMPTY_PROFILE: BusinessProfile = {
   lead_signals: '',
   value_proposition: '',
   tone: 'professional',
+  slack_webhook_url: '',
 };
 
 const PROFILE_KEY = 'proplan_business_profile';
@@ -401,6 +403,52 @@ export default function App() {
       setExporting(false);
     }
   }, [downloadCsv]);
+
+  // Slack integration
+  const [slackStatus, setSlackStatus] = useState<{ kind: 'idle' | 'ok' | 'err'; msg?: string }>({ kind: 'idle' });
+  const [slackBusy, setSlackBusy] = useState(false);
+
+  const slackRequest = useCallback(async (path: string): Promise<{ ok: boolean; detail?: string }> => {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      method: 'POST',
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
+    });
+    if (res.ok) return { ok: true };
+    let detail: string | undefined;
+    try {
+      const body = await res.json();
+      detail = typeof body?.detail === 'string' ? body.detail : `HTTP ${res.status}`;
+    } catch {
+      detail = `HTTP ${res.status}`;
+    }
+    return { ok: false, detail };
+  }, []);
+
+  const sendSlackTest = useCallback(async () => {
+    setSlackBusy(true);
+    setSlackStatus({ kind: 'idle' });
+    // Save the profile first so the webhook URL in the draft is the one the backend reads.
+    try {
+      await fetch(`${API_BASE_URL}/profile/${userId}`, {
+        method: 'PUT',
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ ...profileDraft, user_id: userId }),
+      });
+    } catch { /* profile save failures surface via the ping below */ }
+    const r = await slackRequest(`/integrations/slack/${encodeURIComponent(userId)}/test`);
+    setSlackStatus(r.ok ? { kind: 'ok', msg: 'Test message sent.' } : { kind: 'err', msg: r.detail ?? 'Failed.' });
+    setSlackBusy(false);
+  }, [profileDraft, slackRequest, userId]);
+
+  const sendSlackLeads = useCallback(async () => {
+    setSlackBusy(true);
+    setLeadsError(null);
+    const params = new URLSearchParams({ limit: '10' });
+    if (minScore > 0) params.set('min_score', String(minScore));
+    const r = await slackRequest(`/integrations/slack/${encodeURIComponent(userId)}/leads?${params}`);
+    if (!r.ok) setLeadsError(r.detail ?? 'Slack send failed.');
+    setSlackBusy(false);
+  }, [minScore, slackRequest, userId]);
 
   // Load profile from API on mount (falls back to localStorage if unavailable)
   useEffect(() => {
@@ -992,6 +1040,20 @@ export default function App() {
                     <Download size={11} />
                     EXPORT CSV
                   </button>
+                  <button
+                    type="button"
+                    className="toolbar-btn"
+                    onClick={sendSlackLeads}
+                    disabled={slackBusy || leads.length === 0}
+                    title={
+                      leads.length === 0
+                        ? 'No leads to send'
+                        : 'Post the top 10 leads in this view to your Slack channel'
+                    }
+                  >
+                    <MessageSquare size={11} />
+                    SEND TO SLACK
+                  </button>
                 </div>
               </div>
 
@@ -1356,6 +1418,49 @@ export default function App() {
                       placeholder="e.g. Posted job for 'project coordinator', uses Procore, raised Series A funding"
                     />
                     <p className="profile-hint">What signals indicate a lead is a strong fit for your product?</p>
+                  </div>
+                </div>
+
+                {/* Section: Integrations */}
+                <div className="profile-section">
+                  <p className="profile-section-title">── INTEGRATIONS ──────────────────</p>
+
+                  <div className="profile-field">
+                    <label className="profile-label">SLACK INCOMING WEBHOOK URL</label>
+                    <input
+                      className="profile-input"
+                      type="password"
+                      autoComplete="off"
+                      value={profileDraft.slack_webhook_url}
+                      onChange={e => setProfileDraft(d => ({ ...d, slack_webhook_url: e.target.value }))}
+                      placeholder="https://hooks.slack.com/services/..."
+                    />
+                    <p className="profile-hint">
+                      Create one at api.slack.com/apps → Incoming Webhooks. Used to send lead digests to your channel.
+                    </p>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                      <button
+                        type="button"
+                        className="toolbar-btn"
+                        onClick={sendSlackTest}
+                        disabled={slackBusy || !profileDraft.slack_webhook_url.trim()}
+                      >
+                        <MessageSquare size={11} />
+                        {slackBusy ? 'TESTING…' : 'TEST'}
+                      </button>
+                      {slackStatus.kind === 'ok' && (
+                        <span style={{ color: 'var(--success)', fontSize: 11 }}>
+                          <CheckCircle size={11} style={{ verticalAlign: '-2px', marginRight: 4 }} />
+                          {slackStatus.msg}
+                        </span>
+                      )}
+                      {slackStatus.kind === 'err' && (
+                        <span style={{ color: 'var(--error)', fontSize: 11 }}>
+                          <XCircle size={11} style={{ verticalAlign: '-2px', marginRight: 4 }} />
+                          {slackStatus.msg}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>

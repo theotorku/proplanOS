@@ -67,6 +67,10 @@ class BusinessProfileModel(BaseModel):
     lead_signals: Optional[str] = None
     value_proposition: Optional[str] = None
     tone: str = "professional"
+    # Per-user Slack incoming-webhook URL. Stored in plaintext alongside the
+    # rest of the profile for v1; access is gated by the same API key as
+    # the profile endpoints.
+    slack_webhook_url: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

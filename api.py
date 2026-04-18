@@ -2,13 +2,15 @@
 ProPlan Agent API — FastAPI layer for the orchestrator.
 
 Endpoints:
-    POST /agent/run              — Run the orchestrator with a user request
-    GET  /leads                  — List leads (with optional min_score filter)
-    GET  /leads/export.csv       — Download leads as CSV (same filters)
-    POST /campaigns              — Create a new campaign
-    GET  /campaigns              — List all campaigns
-    GET  /campaigns/export.csv   — Download campaigns as CSV
-    GET  /health                 — Health check
+    POST /agent/run                         — Run the orchestrator with a user request
+    GET  /leads                             — List leads (with optional min_score filter)
+    GET  /leads/export.csv                  — Download leads as CSV (same filters)
+    POST /campaigns                         — Create a new campaign
+    GET  /campaigns                         — List all campaigns
+    GET  /campaigns/export.csv              — Download campaigns as CSV
+    POST /integrations/slack/{user_id}/test — Send a Slack test ping
+    POST /integrations/slack/{user_id}/leads — Send a lead digest to Slack
+    GET  /health                            — Health check
 """
 
 from fastapi import FastAPI, HTTPException, Query, Depends, Security, BackgroundTasks
@@ -467,6 +469,88 @@ def export_leads_csv(
     """Download leads as CSV, honoring the same filters as GET /leads."""
     rows = db.get_leads(min_score, limit=limit, offset=offset)
     return _csv_response(_rows_to_csv(rows, _LEAD_CSV_COLUMNS), "proplan-leads")
+
+
+# -----------------------------
+# Integrations: Slack
+# -----------------------------
+
+def _require_slack_webhook(user_id: str) -> str:
+    """Load the webhook URL for a user, 400/404 with a clear message if missing."""
+    profile = db.get_profile(user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found. Save your profile first.")
+    url = (profile.slack_webhook_url or "").strip()
+    if not url:
+        raise HTTPException(
+            status_code=400,
+            detail="Slack webhook not configured. Paste your incoming-webhook URL in PROFILE → INTEGRATIONS.",
+        )
+    # Guardrail against obvious misconfig — Slack webhooks always live here.
+    if not url.startswith("https://hooks.slack.com/"):
+        raise HTTPException(
+            status_code=400,
+            detail="That URL does not look like a Slack incoming webhook (should start with https://hooks.slack.com/).",
+        )
+    return url
+
+
+def _post_to_slack(webhook_url: str, text: str) -> None:
+    """POST a plaintext message to a Slack incoming webhook. Raises HTTPException on non-2xx."""
+    import httpx
+    try:
+        resp = httpx.post(webhook_url, json={"text": text}, timeout=10.0)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach Slack: {e}") from e
+    if resp.status_code >= 300:
+        # Slack returns a short diagnostic string on error (e.g. "invalid_token", "no_service").
+        raise HTTPException(
+            status_code=502,
+            detail=f"Slack rejected the message (HTTP {resp.status_code}): {resp.text[:200]}",
+        )
+
+
+def _format_lead_digest(rows: List[LeadModel], min_score: Optional[float]) -> str:
+    if not rows:
+        header = "*ProPlan — No leads to send*"
+        if min_score is not None and min_score > 0:
+            header += f" (score ≥ {int(min_score)})"
+        return header
+    header = f"*ProPlan — Top {len(rows)} leads*"
+    if min_score is not None and min_score > 0:
+        header += f" (score ≥ {int(min_score)})"
+    lines = [header]
+    for i, lead in enumerate(rows, start=1):
+        score = f"{lead.icp_score:.0f}" if lead.icp_score is not None else "—"
+        company = lead.company_name or "Unknown"
+        role = f" · {lead.role}" if lead.role else ""
+        lines.append(f"{i}. {lead.full_name} — {company}{role} — Score {score}")
+    return "\n".join(lines)
+
+
+@app.post("/integrations/slack/{user_id}/test", tags=["Integrations"],
+          dependencies=[Depends(verify_api_key)])
+def slack_test(user_id: str):
+    """Send a short ping to the configured Slack webhook — use this to verify setup."""
+    url = _require_slack_webhook(user_id)
+    _post_to_slack(url, ":satellite_antenna: ProPlan connection test — if you see this, your Slack integration is working.")
+    return {"status": "sent"}
+
+
+@app.post("/integrations/slack/{user_id}/leads", tags=["Integrations"],
+          dependencies=[Depends(verify_api_key)])
+def slack_send_leads(
+    user_id: str,
+    min_score: Optional[float] = Query(None, ge=0, le=100),
+    limit: int = Query(10, ge=1, le=50, description="Max leads to include in the digest"),
+):
+    """Post a formatted top-N lead digest to the user's Slack webhook."""
+    url = _require_slack_webhook(user_id)
+    rows = db.get_leads(min_score, limit=limit, offset=0)
+    # Sort descending by score so the highest-fit leads are first in the digest.
+    rows.sort(key=lambda l: l.icp_score or 0, reverse=True)
+    _post_to_slack(url, _format_lead_digest(rows, min_score))
+    return {"status": "sent", "count": len(rows)}
 
 
 @app.get("/campaigns/export.csv", tags=["Campaigns"],
