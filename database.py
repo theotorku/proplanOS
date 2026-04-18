@@ -140,7 +140,14 @@ class InMemoryDatabase:
         return results
 
     def create_lead(self, lead: LeadModel) -> LeadModel:
+        # Match SupabaseDatabase upsert behavior: a lead with the same
+        # email replaces the existing row instead of producing a duplicate.
         with self._lock:
+            if lead.email:
+                for existing_id, existing in self.leads.items():
+                    if existing.email and existing.email == lead.email:
+                        lead.id = existing_id
+                        break
             self.leads[lead.id] = lead
         return lead
 
@@ -211,7 +218,14 @@ class SupabaseDatabase:
     def create_lead(self, lead: LeadModel) -> LeadModel:
         try:
             data = lead.model_dump(exclude_none=True)
-            self.client.table("leads").insert(data).execute()
+            # Upsert on email so re-discovering the same lead refreshes the
+            # row (e.g. updated score/role) instead of duplicating it. Leads
+            # without an email fall back to plain insert because the partial
+            # unique index in 0003 only covers email-bearing rows.
+            if data.get("email"):
+                self.client.table("leads").upsert(data, on_conflict="email").execute()
+            else:
+                self.client.table("leads").insert(data).execute()
             return lead
         except Exception as e:
             logging.error(
@@ -322,11 +336,13 @@ def extract_leads_from_memory(memory: List[Dict[str, Any]]) -> List[LeadModel]:
         for item in data:
             if not (isinstance(item, dict) and "name" in item and "score" in item):
                 continue
+            raw_email = item.get("email")
+            email = raw_email.strip().lower() if isinstance(raw_email, str) and raw_email.strip() else None
             leads.append(LeadModel(
                 full_name=item["name"],
                 company_name=item.get("company") or "Unknown",
                 role=item.get("role"),
-                email=item.get("email"),
+                email=email,
                 icp_score=float(item["score"]),
                 qualification_status="pending",
                 qualification_rationale=item.get("reason"),
