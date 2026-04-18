@@ -2,23 +2,29 @@
 ProPlan Agent API — FastAPI layer for the orchestrator.
 
 Endpoints:
-    POST /agent/run      — Run the orchestrator with a user request
-    GET  /leads          — List leads (with optional min_score filter)
-    POST /campaigns      — Create a new campaign
-    GET  /campaigns      — List all campaigns
-    GET  /health         — Health check
+    POST /agent/run              — Run the orchestrator with a user request
+    GET  /leads                  — List leads (with optional min_score filter)
+    GET  /leads/export.csv       — Download leads as CSV (same filters)
+    POST /campaigns              — Create a new campaign
+    GET  /campaigns              — List all campaigns
+    GET  /campaigns/export.csv   — Download campaigns as CSV
+    GET  /health                 — Health check
 """
 
 from fastapi import FastAPI, HTTPException, Query, Depends, Security, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
+import csv
+import io
 import uuid
 import time
 import os
 import logging
 import threading
+from datetime import datetime, timezone
 
 from proplanOrchestrator import (
     Orchestrator, Tool, SalesAgent, MarketingAgent, SupportAgent, OpsAgent,
@@ -283,6 +289,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Let the browser read the filename on CSV downloads; without this the
+    # frontend falls back to its generic stem instead of the timestamped name.
+    expose_headers=["Content-Disposition"],
 )
 
 
@@ -403,6 +412,72 @@ def list_leads(
     List leads, optionally filtered by minimum score and paginated.
     """
     return db.get_leads(min_score, limit=limit, offset=offset)
+
+
+_LEAD_CSV_COLUMNS: Sequence[str] = (
+    "full_name", "email", "phone", "company_name", "role", "inquiry_type",
+    "icp_score", "qualification_status", "qualification_rationale",
+    "source", "created_at", "id",
+)
+
+_CAMPAIGN_CSV_COLUMNS: Sequence[str] = (
+    "name", "status", "id", "created_at", "updated_at",
+)
+
+
+def _csv_cell(value: Any) -> str:
+    """Flatten a model field into a single CSV cell."""
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return "; ".join(str(v) for v in value)
+    if isinstance(value, dict):
+        import json
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _rows_to_csv(rows: List[Any], columns: Sequence[str]) -> str:
+    buf = io.StringIO()
+    writer = csv.writer(buf, quoting=csv.QUOTE_MINIMAL, lineterminator="\r\n")
+    writer.writerow(columns)
+    for row in rows:
+        data = row.model_dump() if hasattr(row, "model_dump") else dict(row)
+        writer.writerow([_csv_cell(data.get(col)) for col in columns])
+    return buf.getvalue()
+
+
+def _csv_response(body: str, filename_stem: str) -> Response:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    filename = f"{filename_stem}-{stamp}.csv"
+    return Response(
+        content=body,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/leads/export.csv", tags=["Leads"],
+         dependencies=[Depends(verify_api_key)])
+def export_leads_csv(
+    min_score: Optional[float] = Query(None, ge=0, le=100),
+    limit: Optional[int] = Query(None, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+):
+    """Download leads as CSV, honoring the same filters as GET /leads."""
+    rows = db.get_leads(min_score, limit=limit, offset=offset)
+    return _csv_response(_rows_to_csv(rows, _LEAD_CSV_COLUMNS), "proplan-leads")
+
+
+@app.get("/campaigns/export.csv", tags=["Campaigns"],
+         dependencies=[Depends(verify_api_key)])
+def export_campaigns_csv(
+    limit: Optional[int] = Query(None, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+):
+    """Download campaigns as CSV."""
+    rows = db.get_campaigns(limit=limit, offset=offset)
+    return _csv_response(_rows_to_csv(rows, _CAMPAIGN_CSV_COLUMNS), "proplan-campaigns")
 
 
 @app.post("/campaigns", response_model=CampaignModel, status_code=201, tags=["Campaigns"],

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Terminal, Activity, Shield, Zap, CheckCircle, XCircle, RefreshCw, Users, Megaphone, Settings, Save } from 'lucide-react';
+import { Send, Terminal, Activity, Shield, Zap, CheckCircle, XCircle, RefreshCw, Users, Megaphone, Settings, Save, Download } from 'lucide-react';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 const API_KEY = import.meta.env.VITE_API_KEY ?? '';
@@ -355,6 +355,52 @@ export default function App() {
       setCampaignsLoading(false);
     }
   }, []);
+
+  const downloadCsv = useCallback(async (path: string, fallbackName: string) => {
+    const res = await fetch(`${API_BASE_URL}${path}`, { headers: apiHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    // Prefer the server-supplied filename (has a timestamp); fall back to the
+    // caller-provided stem if the header is missing or opaque to CORS.
+    const disp = res.headers.get('content-disposition') ?? '';
+    const match = /filename="?([^"]+)"?/i.exec(disp);
+    const filename = match?.[1] ?? fallbackName;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const [exporting, setExporting] = useState(false);
+  const exportLeads = useCallback(async () => {
+    setExporting(true);
+    setLeadsError(null);
+    try {
+      const params = new URLSearchParams({ limit: '5000' });
+      if (minScore > 0) params.set('min_score', String(minScore));
+      await downloadCsv(`/leads/export.csv?${params}`, 'proplan-leads.csv');
+    } catch (err: unknown) {
+      setLeadsError(err instanceof Error ? err.message : 'Export failed.');
+    } finally {
+      setExporting(false);
+    }
+  }, [downloadCsv, minScore]);
+
+  const exportCampaigns = useCallback(async () => {
+    setExporting(true);
+    setCampaignsError(null);
+    try {
+      await downloadCsv('/campaigns/export.csv?limit=5000', 'proplan-campaigns.csv');
+    } catch (err: unknown) {
+      setCampaignsError(err instanceof Error ? err.message : 'Export failed.');
+    } finally {
+      setExporting(false);
+    }
+  }, [downloadCsv]);
 
   // Load profile from API on mount (falls back to localStorage if unavailable)
   useEffect(() => {
@@ -936,6 +982,16 @@ export default function App() {
                     <RefreshCw size={11} className={leadsLoading ? 'spin' : ''} />
                     REFRESH
                   </button>
+                  <button
+                    type="button"
+                    className="toolbar-btn"
+                    onClick={exportLeads}
+                    disabled={exporting || leads.length === 0}
+                    title={leads.length === 0 ? 'No leads to export' : 'Download current view as CSV'}
+                  >
+                    <Download size={11} />
+                    EXPORT CSV
+                  </button>
                 </div>
               </div>
 
@@ -1015,6 +1071,16 @@ export default function App() {
                   <button type="button" className="toolbar-btn" onClick={fetchCampaigns} disabled={campaignsLoading}>
                     <RefreshCw size={11} className={campaignsLoading ? 'spin' : ''} />
                     REFRESH
+                  </button>
+                  <button
+                    type="button"
+                    className="toolbar-btn"
+                    onClick={exportCampaigns}
+                    disabled={exporting || campaigns.length === 0}
+                    title={campaigns.length === 0 ? 'No campaigns to export' : 'Download all campaigns as CSV'}
+                  >
+                    <Download size={11} />
+                    EXPORT CSV
                   </button>
                 </div>
               </div>
