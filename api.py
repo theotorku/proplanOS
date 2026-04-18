@@ -100,18 +100,40 @@ def _evict_stale_runs() -> None:
         del _run_store[k]
 
 
+def _db_backend_name() -> str:
+    """Return "supabase" or "memory" so callers can see which store is live."""
+    return "supabase" if type(db).__name__ == "SupabaseDatabase" else "memory"
+
+
 def _run_orchestrator_bg(run_id: str, request: str, business_context: Optional[str], user_id: str) -> None:
     """Background task: run orchestrator and write result to _run_store."""
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    persistence_errors: List[Dict[str, Any]] = []
+    leads_extracted = 0
+    leads_saved = 0
+    session_logged = False
+
     try:
         orchestrator = create_orchestrator()
         result = orchestrator.run(request, business_context=business_context)
 
-        try:
-            for lead in extract_leads_from_memory(result.get("memory", [])):
+        extracted = extract_leads_from_memory(result.get("memory", []))
+        leads_extracted = len(extracted)
+        for idx, lead in enumerate(extracted):
+            try:
                 db.create_lead(lead)
-        except Exception as e:
-            logging.warning("Lead persistence failed (non-fatal): %s", e)
+                leads_saved += 1
+            except Exception as e:
+                logging.error(
+                    "Lead persistence failed (run=%s lead_idx=%d backend=%s): %s",
+                    run_id, idx, _db_backend_name(), e, exc_info=True,
+                )
+                persistence_errors.append({
+                    "target": "lead",
+                    "index": idx,
+                    "error_type": type(e).__name__,
+                    "message": str(e),
+                })
 
         session_status = "completed" if result["status"] == "goal_met" else "failed"
         try:
@@ -126,8 +148,17 @@ def _run_orchestrator_bg(run_id: str, request: str, business_context: Optional[s
                 started_at=started_at,
                 completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             ))
+            session_logged = True
         except Exception as e:
-            logging.warning("Session logging failed (non-fatal): %s", e)
+            logging.error(
+                "Session logging failed (run=%s backend=%s): %s",
+                run_id, _db_backend_name(), e, exc_info=True,
+            )
+            persistence_errors.append({
+                "target": "session",
+                "error_type": type(e).__name__,
+                "message": str(e),
+            })
 
         final = {
             "status": result["status"],
@@ -136,6 +167,13 @@ def _run_orchestrator_bg(run_id: str, request: str, business_context: Optional[s
             "total_cost": result["total_cost"],
             "cost_breakdown": result["cost_breakdown"],
             "memory": result["memory"],
+            "persistence": {
+                "backend": _db_backend_name(),
+                "leads_extracted": leads_extracted,
+                "leads_saved": leads_saved,
+                "session_logged": session_logged,
+                "errors": persistence_errors,
+            },
         }
         with _run_store_lock:
             _run_store[run_id] = {"status": "completed", "result": final, "_ts": time.time()}
@@ -250,8 +288,12 @@ app.add_middleware(
 
 @app.get("/health", tags=["System"])
 def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy", "timestamp": time.time()}
+    """Health check endpoint. Reports DB backend so the UI can warn on in-memory mode."""
+    return {
+        "status": "healthy",
+        "timestamp": time.time(),
+        "db_backend": _db_backend_name(),
+    }
 
 
 @app.post("/agent/run", response_model=AgentRunDispatchResponse, tags=["Agent"], dependencies=[Depends(verify_api_key)])

@@ -103,6 +103,21 @@ type TaskMemory = {
   };
 };
 
+type PersistenceError = {
+  target: 'lead' | 'session' | string;
+  index?: number;
+  error_type: string;
+  message: string;
+};
+
+type PersistenceInfo = {
+  backend: 'supabase' | 'memory' | string;
+  leads_extracted: number;
+  leads_saved: number;
+  session_logged: boolean;
+  errors: PersistenceError[];
+};
+
 type OrchestratorResponse = {
   status: string;
   run_id: string;
@@ -110,6 +125,7 @@ type OrchestratorResponse = {
   total_cost: number;
   cost_breakdown: Record<string, number>;
   memory: TaskMemory[];
+  persistence?: PersistenceInfo;
 };
 
 type Lead = {
@@ -225,6 +241,7 @@ export default function App() {
 
   // System health
   const [systemOnline, setSystemOnline] = useState(true);
+  const [dbBackend, setDbBackend] = useState<string | null>(null);
 
   // Validation state
   const [cmdShake, setCmdShake] = useState(false);
@@ -236,7 +253,15 @@ export default function App() {
   useEffect(() => {
     const check = () => {
       fetch(`${API_BASE_URL}/health`, { headers: apiHeaders() })
-        .then(r => setSystemOnline(r.ok))
+        .then(async r => {
+          setSystemOnline(r.ok);
+          if (r.ok) {
+            try {
+              const data = await r.json();
+              setDbBackend(typeof data?.db_backend === 'string' ? data.db_backend : null);
+            } catch { setDbBackend(null); }
+          }
+        })
         .catch(() => setSystemOnline(false));
     };
     check();
@@ -473,6 +498,18 @@ export default function App() {
           <span className="status-pipe">|</span>
           <Activity size={11} />
           <span className="status-label">{systemOnline ? '4 AGENTS ACTIVE' : 'AGENTS UNAVAILABLE'}</span>
+          {dbBackend && dbBackend !== 'supabase' && (
+            <>
+              <span className="status-pipe">|</span>
+              <span
+                className="status-label"
+                style={{ color: 'var(--warn)' }}
+                title="Database is running in in-memory mode. Leads and runs will not persist across restarts or serverless function instances. Configure SUPABASE_URL and SUPABASE_KEY on the backend."
+              >
+                DB: {dbBackend.toUpperCase()} (EPHEMERAL)
+              </span>
+            </>
+          )}
         </div>
       </header>
 
@@ -717,6 +754,32 @@ export default function App() {
                         MISSION COMPLETE — {response.memory.length} TASK{response.memory.length !== 1 ? 'S' : ''} EXECUTED
                       </span>
                     </div>
+
+                    {response.persistence && (
+                      response.persistence.errors.length > 0 ||
+                      response.persistence.backend === 'memory' ||
+                      (response.persistence.leads_extracted > 0 && response.persistence.leads_saved === 0)
+                    ) && (
+                      <div className="error-box" style={{ margin: '0 0 16px', borderColor: 'var(--warn)', color: 'var(--warn)' }}>
+                        <strong>PERSISTENCE WARNING</strong>
+                        <div style={{ marginTop: 6, fontSize: '0.85em', opacity: 0.9 }}>
+                          <div>BACKEND: {response.persistence.backend.toUpperCase()}
+                            {response.persistence.backend === 'memory' && ' — data will not survive a restart and is not visible across workers'}
+                          </div>
+                          <div>LEADS: extracted {response.persistence.leads_extracted} · saved {response.persistence.leads_saved}</div>
+                          <div>RUN LOGGED: {response.persistence.session_logged ? 'yes' : 'no'}</div>
+                          {response.persistence.errors.length > 0 && (
+                            <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+                              {response.persistence.errors.map((err, i) => (
+                                <li key={i} style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
+                                  [{err.target}{typeof err.index === 'number' ? ` #${err.index}` : ''}] {err.error_type}: {err.message}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     {response.memory.map((step, i) => {
                       const a = getAgent(step.task.agent);
