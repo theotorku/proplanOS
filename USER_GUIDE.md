@@ -115,6 +115,10 @@ A database table of all leads discovered by agent runs.
 
 **Refresh:** Click the REFRESH button to pull the latest leads from the database.
 
+**Export CSV:** Click EXPORT CSV to download the current view as a timestamped `.csv` file. The export honors the active MIN SCORE filter and includes fields beyond what's in the table (email, phone, company, role, qualification rationale). Drop it straight into your CRM.
+
+**Send to Slack:** If you've configured a Slack webhook in PROFILE → INTEGRATIONS, click SEND TO SLACK to post the top 10 leads (sorted by score) to your channel.
+
 Leads are auto-populated when you run missions with the Sales agent. You don't need to add them manually.
 
 ### Campaigns
@@ -129,6 +133,38 @@ A registry of marketing campaigns.
 | ID | Unique campaign identifier |
 
 Campaigns can be created via the API (`POST /campaigns`). Future versions will allow creating campaigns directly from the UI.
+
+**Export CSV:** The CAMPAIGNS toolbar also has an EXPORT CSV button for downloading the registry as a timestamped file.
+
+---
+
+## Sharing Results
+
+### Export to CSV
+
+Both LEADS and CAMPAIGNS have an **EXPORT CSV** button in the toolbar. The file is timestamped (`proplan-leads-YYYYMMDD-HHMMSS.csv`) and includes every stored field — not just the columns shown in the table. For LEADS, the active MIN SCORE filter applies to the export, so you can pull just the high-fit slice.
+
+CSV imports cleanly into HubSpot, Salesforce, Close, Pipedrive, and Google Sheets.
+
+### Slack Integration
+
+Send a lead digest to your Slack channel with one click.
+
+**One-time setup** (inside Slack):
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**.
+2. Pick your workspace and name it (e.g. "ProPlan").
+3. Under **Incoming Webhooks**, toggle the feature on.
+4. Click **Add New Webhook to Workspace**, pick the channel, and authorize.
+5. Copy the webhook URL (it starts with `https://hooks.slack.com/services/...`).
+
+**Inside ProplanOS:**
+1. Open the **PROFILE** tab → scroll to **INTEGRATIONS**.
+2. Paste the webhook URL into **SLACK INCOMING WEBHOOK URL**.
+3. Click **SAVE PROFILE**, then **TEST** to confirm Slack receives a message.
+
+Once that's done, every LEADS view shows a **SEND TO SLACK** button. Clicking it posts the top 10 leads from the current view (sorted by score, honoring MIN SCORE) to your channel.
+
+> HubSpot integration is on the v3 roadmap. For now, use **EXPORT CSV** to move leads into HubSpot or any other CRM.
 
 ---
 
@@ -221,6 +257,14 @@ curl -X POST https://your-backend-url/agent/run \
 
 # List leads (with score filter)
 curl "https://your-backend-url/leads?min_score=70"
+
+# Download leads as CSV (honors the same filters)
+curl -OJ "https://your-backend-url/leads/export.csv?min_score=70" \
+  -H "X-API-Key: your-api-key"
+
+# Post the top 10 leads to Slack (webhook URL must be in the user's profile)
+curl -X POST "https://your-backend-url/integrations/slack/user-1/leads?min_score=70" \
+  -H "X-API-Key: your-api-key"
 
 # Create a campaign
 curl -X POST https://your-backend-url/campaigns \

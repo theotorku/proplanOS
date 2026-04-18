@@ -358,6 +358,18 @@ Poll for run result.
 | `limit` | `int` | `None` | Max results (1-500). |
 | `offset` | `int` | `0` | Pagination offset. |
 
+### `GET /leads/export.csv`
+
+Stream leads as a CSV download. Honors the same filters as `GET /leads`.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `min_score` | `float` | `None` | Minimum ICP score filter. |
+| `limit` | `int` | `None` | Max rows (1-5000). |
+| `offset` | `int` | `0` | Pagination offset. |
+
+Response: `text/csv; charset=utf-8` with `Content-Disposition: attachment; filename="proplan-leads-YYYYMMDD-HHMMSS.csv"`. Columns: `full_name, email, phone, company_name, role, inquiry_type, icp_score, qualification_status, qualification_rationale, source, created_at, id`.
+
 ### `POST /campaigns`
 
 ```json
@@ -370,6 +382,32 @@ Poll for run result.
 |-------|------|---------|-------------|
 | `limit` | `int` | `None` | Max results (1-500). |
 | `offset` | `int` | `0` | Pagination offset. |
+
+### `GET /campaigns/export.csv`
+
+Stream campaigns as a CSV download.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | `int` | `None` | Max rows (1-5000). |
+| `offset` | `int` | `0` | Pagination offset. |
+
+Response: `text/csv` with timestamped filename. Columns: `name, status, id, created_at, updated_at`.
+
+### `POST /integrations/slack/{user_id}/test`
+
+Send a short ping to the user's configured Slack incoming webhook. Returns `{"status": "sent"}` on success, 400 if the webhook isn't configured or doesn't start with `https://hooks.slack.com/`, 502 if Slack rejects the message.
+
+### `POST /integrations/slack/{user_id}/leads`
+
+Post a top-N lead digest (sorted by score, descending) to the user's Slack webhook.
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `min_score` | `float` | `None` | Minimum ICP score filter. |
+| `limit` | `int` | `10` | Max leads in the digest (1-50). |
+
+Response: `{"status": "sent", "count": N}`. Same 400/502 semantics as the test endpoint.
 
 ### `GET /profile/{user_id}`
 
@@ -404,7 +442,9 @@ Campaign record: `name`, `status` (default `"draft"`).
 Run log: `run_id`, `user_id`, `agent_type`, `status`, `cost_usd`, `started_at`, `completed_at`.
 
 ### `BusinessProfileModel`
-Per-user business context: `company_name`, `what_we_do`, `icp`, `target_industries`, `company_size`, `geography`, `lead_signals`, `value_proposition`, `tone`.
+Per-user business context: `company_name`, `what_we_do`, `icp`, `target_industries`, `company_size`, `geography`, `lead_signals`, `value_proposition`, `tone`, `slack_webhook_url`.
+
+> `slack_webhook_url` is stored as plaintext on `business_profiles`. Access is gated by the same API key as the profile endpoints. Added in migration `0005_add_slack_webhook_url.sql`.
 
 ### Database Providers
 

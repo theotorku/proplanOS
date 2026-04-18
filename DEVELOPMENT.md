@@ -255,13 +255,28 @@ class TestSupportAgent(unittest.TestCase):
 
 ## Project Roadmap
 
-Per the [architecture spec](file:///c:/Users/TheoTorku/OneDrive/Desktop/march%202026/Proplan_Operating_System/Proplan_Agent_Architecture.md), the next priorities are:
+### Launch (v2 — shipped)
 
-| Priority | Item | Status |
-|----------|------|--------|
-| 1 | FastAPI routes (`POST /agent/run`, `GET /leads`) | Completed |
-| 2 | Supabase integration (structured + vector memory) | Completed |
-| 3 | Async dispatch (Redis + Celery) | Completed |
-| 4 | Frontend (React) | Not started |
-| 5 | Support & Ops agents | Completed |
-| 6 | Real LLM provider integration | Completed |
+| Item | Status |
+|------|--------|
+| FastAPI routes (`POST /agent/run`, `GET /leads`, `GET /campaigns`, `GET /runs`) | Completed |
+| Supabase integration (structured memory, lead dedup, run history) | Completed |
+| Async dispatch via FastAPI `BackgroundTasks` + in-memory run store | Completed |
+| React 19 + TypeScript frontend (Mission, Leads, Campaigns, History, Profile) | Completed |
+| Sales, Marketing, Support, Ops agents with Anthropic Claude | Completed |
+| Real LLM providers (`AnthropicPlannerProvider`, `AnthropicAgentProvider`) | Completed |
+| Persistence instrumentation (structured errors + amber DIAGNOSTICS panel) | Completed |
+| Honest completion banner (success vs partial, with task counts) | Completed |
+| CSV export for leads and campaigns (honors min_score filter) | Completed |
+| Slack integration (per-user incoming webhook + SEND TO SLACK) | Completed |
+
+### Post-launch (v3 — planned)
+
+| Item | Why it's queued |
+|------|-----------------|
+| HubSpot integration (Private App token, contact push) | CRM field-mapping and error classes deserve their own iteration — CSV export is the v2 escape path. |
+| Recurring missions ("send 5 new leads every morning") | Needs a real scheduler (cron/queue), idempotency keys, delivery dedup. Not a weekend build. |
+| Personalized mission template generated from PROFILE | Proves silent-context-injection; small but needs a read-through of how agents consume the profile. |
+| Streaming step list (replace polling spinner with live task ticks) | UX upgrade — depends on the run-status endpoint emitting intermediate events. |
+| Mission Receipt (shareable URL per run) | Privacy review needed before lead lists are exposable via public URLs. |
+| Confidence thresholds on agent output (⚠ for low-confidence results) | Requires agents to emit honest confidence scores — current outputs aren't reliable enough to gate on. |

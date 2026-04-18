@@ -124,9 +124,13 @@ proplanOS/
 │   ├── package.json
 │   └── ...
 │
+├── migrations/               # Idempotent Supabase SQL migrations (apply via SQL editor)
+│
 ├── Proplan_Agent_Architecture.md
 ├── API_REFERENCE.md
 ├── DEVELOPMENT.md
+├── USER_GUIDE.md
+├── ONBOARDING.md
 └── README.md
 ```
 
@@ -162,8 +166,15 @@ proplanOS/
 | `POST` | `/agent/run/async` | API Key | Queue orchestrator run (Celery) |
 | `GET` | `/agent/run/{task_id}` | API Key | Poll async run status |
 | `GET` | `/leads` | API Key | List leads (with `?min_score=` filter) |
+| `GET` | `/leads/export.csv` | API Key | Download leads as CSV (same filters) |
 | `POST` | `/campaigns` | API Key | Create a campaign |
 | `GET` | `/campaigns` | API Key | List campaigns |
+| `GET` | `/campaigns/export.csv` | API Key | Download campaigns as CSV |
+| `GET` | `/profile/{user_id}` | API Key | Fetch business profile |
+| `PUT` | `/profile/{user_id}` | API Key | Upsert business profile |
+| `GET` | `/runs` | API Key | List recent orchestrator runs for a user |
+| `POST` | `/integrations/slack/{user_id}/test` | API Key | Send a Slack webhook ping |
+| `POST` | `/integrations/slack/{user_id}/leads` | API Key | Post a top-N lead digest to Slack |
 
 **Quick smoke test:**
 
