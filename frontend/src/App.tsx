@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Terminal, Activity, Shield, Zap, CheckCircle, XCircle, RefreshCw, Users, Megaphone, Settings, Save, Download, MessageSquare } from 'lucide-react';
+import { Send, Terminal, Activity, Shield, Zap, CheckCircle, XCircle, RefreshCw, Users, Megaphone, Settings, Save, Download, MessageSquare, AlertTriangle } from 'lucide-react';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 const API_KEY = import.meta.env.VITE_API_KEY ?? '';
@@ -233,6 +233,7 @@ export default function App() {
   const [profile, setProfile]           = useState<BusinessProfile>(loadProfile);
   const [profileDraft, setProfileDraft] = useState<BusinessProfile>(loadProfile);
   const [profileSaved, setProfileSaved] = useState(false);
+  const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
 
   // History state
   const [runs, setRuns]               = useState<RunHistory[]>([]);
@@ -358,7 +359,7 @@ export default function App() {
     }
   }, []);
 
-  const downloadCsv = useCallback(async (path: string, fallbackName: string) => {
+  const downloadCsv = useCallback(async (path: string, fallbackName: string): Promise<number> => {
     const res = await fetch(`${API_BASE_URL}${path}`, { headers: apiHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     // Prefer the server-supplied filename (has a timestamp); fall back to the
@@ -366,7 +367,11 @@ export default function App() {
     const disp = res.headers.get('content-disposition') ?? '';
     const match = /filename="?([^"]+)"?/i.exec(disp);
     const filename = match?.[1] ?? fallbackName;
-    const blob = await res.blob();
+    const text = await res.text();
+    // Count newlines excluding header + trailing newline
+    const lines = text.split(/\r?\n/).filter(Boolean);
+    const rowCount = Math.max(0, lines.length - 1);
+    const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -375,34 +380,47 @@ export default function App() {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+    return rowCount;
   }, []);
 
   const [exporting, setExporting] = useState(false);
+  const [exportStatus, setExportStatus] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
+  const flashExportStatus = useCallback((kind: 'ok' | 'err', msg: string) => {
+    setExportStatus({ kind, msg });
+    window.setTimeout(() => setExportStatus(null), 4000);
+  }, []);
+
   const exportLeads = useCallback(async () => {
     setExporting(true);
     setLeadsError(null);
     try {
       const params = new URLSearchParams({ limit: '5000' });
       if (minScore > 0) params.set('min_score', String(minScore));
-      await downloadCsv(`/leads/export.csv?${params}`, 'proplan-leads.csv');
+      const count = await downloadCsv(`/leads/export.csv?${params}`, 'proplan-leads.csv');
+      flashExportStatus('ok', `Exported ${count} lead${count === 1 ? '' : 's'}.`);
     } catch (err: unknown) {
-      setLeadsError(err instanceof Error ? err.message : 'Export failed.');
+      const msg = err instanceof Error ? err.message : 'Export failed.';
+      setLeadsError(msg);
+      flashExportStatus('err', `Export failed: ${msg}`);
     } finally {
       setExporting(false);
     }
-  }, [downloadCsv, minScore]);
+  }, [downloadCsv, minScore, flashExportStatus]);
 
   const exportCampaigns = useCallback(async () => {
     setExporting(true);
     setCampaignsError(null);
     try {
-      await downloadCsv('/campaigns/export.csv?limit=5000', 'proplan-campaigns.csv');
+      const count = await downloadCsv('/campaigns/export.csv?limit=5000', 'proplan-campaigns.csv');
+      flashExportStatus('ok', `Exported ${count} campaign${count === 1 ? '' : 's'}.`);
     } catch (err: unknown) {
-      setCampaignsError(err instanceof Error ? err.message : 'Export failed.');
+      const msg = err instanceof Error ? err.message : 'Export failed.';
+      setCampaignsError(msg);
+      flashExportStatus('err', `Export failed: ${msg}`);
     } finally {
       setExporting(false);
     }
-  }, [downloadCsv]);
+  }, [downloadCsv, flashExportStatus]);
 
   // Slack integration
   const [slackStatus, setSlackStatus] = useState<{ kind: 'idle' | 'ok' | 'err'; msg?: string }>({ kind: 'idle' });
@@ -519,15 +537,28 @@ export default function App() {
 
   // ── Profile save (localStorage + API) ─────────────────────────
   const saveProfile = async () => {
+    setProfileSaveError(null);
     localStorage.setItem(PROFILE_KEY, JSON.stringify(profileDraft));
     setProfile(profileDraft);
     try {
-      await fetch(`${API_BASE_URL}/profile/${userId}`, {
+      const res = await fetch(`${API_BASE_URL}/profile/${userId}`, {
         method: 'PUT',
         headers: apiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ ...profileDraft, user_id: userId }),
       });
-    } catch { /* silently fail — localStorage already saved */ }
+      if (!res.ok) {
+        let detail: string = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          if (typeof body?.detail === 'string') detail = body.detail;
+        } catch { /* response wasn't JSON; keep HTTP status */ }
+        setProfileSaveError(detail);
+        return;  // don't flash "SAVED" — the server rejected the write
+      }
+    } catch (err: unknown) {
+      setProfileSaveError(err instanceof Error ? err.message : 'Network error — profile may not be persisted.');
+      return;
+    }
     setProfileSaved(true);
     setTimeout(() => setProfileSaved(false), 2000);
   };
@@ -1057,6 +1088,29 @@ export default function App() {
                 </div>
               </div>
 
+              {exportStatus && (
+                <div
+                  className="error-box"
+                  style={
+                    exportStatus.kind === 'ok'
+                      ? {
+                          margin: '0 0 12px',
+                          fontSize: 12,
+                          background: 'rgba(57, 255, 20, 0.05)',
+                          borderColor: 'rgba(57, 255, 20, 0.22)',
+                          borderLeftColor: 'var(--success)',
+                          color: 'var(--success)',
+                        }
+                      : { margin: '0 0 12px', fontSize: 12 }
+                  }
+                >
+                  {exportStatus.kind === 'ok'
+                    ? <CheckCircle size={11} style={{ verticalAlign: '-2px', marginRight: 6 }} />
+                    : <XCircle size={11} style={{ verticalAlign: '-2px', marginRight: 6 }} />}
+                  {exportStatus.msg}
+                </div>
+              )}
+
               {leadsError && <div className="error-box" style={{ margin: '0 0 16px' }}><strong>ERR:</strong> {leadsError}</div>}
 
               {leadsLoading && (
@@ -1146,6 +1200,29 @@ export default function App() {
                   </button>
                 </div>
               </div>
+
+              {exportStatus && (
+                <div
+                  className="error-box"
+                  style={
+                    exportStatus.kind === 'ok'
+                      ? {
+                          margin: '0 0 12px',
+                          fontSize: 12,
+                          background: 'rgba(57, 255, 20, 0.05)',
+                          borderColor: 'rgba(57, 255, 20, 0.22)',
+                          borderLeftColor: 'var(--success)',
+                          color: 'var(--success)',
+                        }
+                      : { margin: '0 0 12px', fontSize: 12 }
+                  }
+                >
+                  {exportStatus.kind === 'ok'
+                    ? <CheckCircle size={11} style={{ verticalAlign: '-2px', marginRight: 6 }} />
+                    : <XCircle size={11} style={{ verticalAlign: '-2px', marginRight: 6 }} />}
+                  {exportStatus.msg}
+                </div>
+              )}
 
               {campaignsError && <div className="error-box" style={{ margin: '0 0 16px' }}><strong>ERR:</strong> {campaignsError}</div>}
 
@@ -1296,6 +1373,13 @@ export default function App() {
                 </button>
               </div>
 
+              {profileSaveError && (
+                <div className="profile-banner" style={{ borderColor: 'var(--error)', color: 'var(--error)' }}>
+                  <AlertTriangle size={11} style={{ color: 'var(--error)', flexShrink: 0 }} />
+                  <span><strong>SAVE FAILED:</strong> {profileSaveError}</span>
+                </div>
+              )}
+
               {!profileComplete(profile) && (
                 <div className="profile-banner">
                   <Zap size={11} style={{ color: 'var(--warn)', flexShrink: 0 }} />
@@ -1429,8 +1513,9 @@ export default function App() {
                     <label className="profile-label">SLACK INCOMING WEBHOOK URL</label>
                     <input
                       className="profile-input"
-                      type="password"
+                      type="text"
                       autoComplete="off"
+                      spellCheck={false}
                       value={profileDraft.slack_webhook_url}
                       onChange={e => setProfileDraft(d => ({ ...d, slack_webhook_url: e.target.value }))}
                       placeholder="https://hooks.slack.com/services/..."
@@ -1439,15 +1524,22 @@ export default function App() {
                       Create one at api.slack.com/apps → Incoming Webhooks. Used to send lead digests to your channel.
                     </p>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
-                      <button
-                        type="button"
-                        className="toolbar-btn"
-                        onClick={sendSlackTest}
-                        disabled={slackBusy || !profileDraft.slack_webhook_url.trim()}
-                      >
-                        <MessageSquare size={11} />
-                        {slackBusy ? 'TESTING…' : 'TEST'}
-                      </button>
+                      {(() => {
+                        const testDisabled = slackBusy || !profileDraft.slack_webhook_url.trim();
+                        return (
+                          <button
+                            type="button"
+                            className="toolbar-btn"
+                            onClick={sendSlackTest}
+                            disabled={testDisabled}
+                            title={testDisabled && !slackBusy ? 'Paste a webhook URL above, then click SAVE PROFILE before testing.' : undefined}
+                            style={testDisabled ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}
+                          >
+                            <MessageSquare size={11} />
+                            {slackBusy ? 'TESTING…' : 'TEST'}
+                          </button>
+                        );
+                      })()}
                       {slackStatus.kind === 'ok' && (
                         <span style={{ color: 'var(--success)', fontSize: 11 }}>
                           <CheckCircle size={11} style={{ verticalAlign: '-2px', marginRight: 4 }} />

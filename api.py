@@ -389,7 +389,18 @@ def get_profile(user_id: str):
 def upsert_profile(user_id: str, body: BusinessProfileModel):
     """Create or update the business profile for a user."""
     body.user_id = user_id
-    return db.upsert_profile(body)
+    try:
+        return db.upsert_profile(body)
+    except Exception as e:
+        # Surface the underlying error to the frontend instead of letting it
+        # bubble up as an opaque 5xx. Most common cause is a Supabase column
+        # the deployed schema doesn't have yet (pending migration) — naming
+        # the failure lets the user act on it.
+        logging.error("PUT /profile/%s failed: %s", user_id, e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Profile save failed: {type(e).__name__}: {e}",
+        ) from e
 
 
 @app.get("/runs", tags=["History"], response_model=list[AgentSessionModel], dependencies=[Depends(verify_api_key)])

@@ -278,6 +278,12 @@ class SupabaseDatabase:
     def upsert_profile(self, profile: "BusinessProfileModel") -> "BusinessProfileModel":
         try:
             data = profile.model_dump(exclude_none=True)
+            # Empty strings are indistinguishable from "not set" for these fields.
+            # Drop them so a profile save doesn't require every optional column
+            # to exist on the deployed table — e.g. slack_webhook_url lands in
+            # migration 0005, and we don't want every PUT /profile to 5xx when
+            # that migration is still pending.
+            data = {k: v for k, v in data.items() if v != ""}
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
             self.client.table("business_profiles").upsert(data, on_conflict="user_id").execute()
             return profile
