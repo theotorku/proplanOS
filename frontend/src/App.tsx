@@ -478,9 +478,13 @@ export default function App() {
     const params = new URLSearchParams({ limit: '10' });
     if (minScore > 0) params.set('min_score', String(minScore));
     const r = await slackRequest(`/integrations/slack/${encodeURIComponent(userId)}/leads?${params}`);
-    if (!r.ok) setLeadsError(r.detail ?? 'Slack send failed.');
+    if (r.ok) {
+      flashExportStatus('ok', 'Lead digest posted to Slack.');
+    } else {
+      setLeadsError(r.detail ?? 'Slack send failed.');
+    }
     setSlackBusy(false);
-  }, [minScore, slackRequest, userId]);
+  }, [minScore, slackRequest, userId, flashExportStatus]);
 
   // Load profile from API on mount (falls back to localStorage if unavailable)
   useEffect(() => {

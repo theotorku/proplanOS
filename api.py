@@ -21,11 +21,17 @@ from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional, Sequence
 import csv
 import io
+import json
 import uuid
 import time
 import os
 import logging
 from datetime import datetime, timezone
+
+try:
+    import httpx
+except ImportError:
+    httpx = None  # Slack endpoints will 501 if the package is missing.
 
 from proplanOrchestrator import (
     Orchestrator, Tool, SalesAgent, MarketingAgent, SupportAgent, OpsAgent,
@@ -444,7 +450,6 @@ def _csv_cell(value: Any) -> str:
     if isinstance(value, list):
         return "; ".join(str(v) for v in value)
     if isinstance(value, dict):
-        import json
         return json.dumps(value, ensure_ascii=False)
     return str(value)
 
@@ -507,7 +512,11 @@ def _require_slack_webhook(user_id: str) -> str:
 
 def _post_to_slack(webhook_url: str, text: str) -> None:
     """POST a plaintext message to a Slack incoming webhook. Raises HTTPException on non-2xx."""
-    import httpx
+    if httpx is None:
+        raise HTTPException(
+            status_code=501,
+            detail="Slack integration unavailable: httpx is not installed on the server.",
+        )
     try:
         resp = httpx.post(webhook_url, json={"text": text}, timeout=10.0)
     except httpx.HTTPError as e:
