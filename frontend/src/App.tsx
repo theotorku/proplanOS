@@ -266,6 +266,10 @@ export default function App() {
   // Validation state
   const [cmdShake, setCmdShake] = useState(false);
 
+  // Mission polling: elapsed timer + cancellation
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const abortRef = useRef<AbortController | null>(null);
+
   const outputRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLInputElement>(null);
 
@@ -309,6 +313,16 @@ export default function App() {
     }, 550);
     return () => clearTimeout(t);
   }, [isRunning, procIdx]);
+
+  // Elapsed-time ticker: drives the `45s` counter in the running block so the
+  // user can see progress while polling.
+  useEffect(() => {
+    if (!isRunning) { setElapsedMs(0); return; }
+    const start = Date.now();
+    setElapsedMs(0);
+    const iv = setInterval(() => setElapsedMs(Date.now() - start), 500);
+    return () => clearInterval(iv);
+  }, [isRunning]);
 
   // ── Data fetching ──────────────────────────────────────────────
   const fetchLeads = useCallback(async (score?: number) => {
@@ -490,7 +504,7 @@ export default function App() {
     if (view === 'history')   fetchRuns();
   }, [view, fetchLeads, fetchCampaigns, fetchRuns]);
 
-  // ── Mission submit (async + polling) ──────────────────────────
+  // ── Mission submit (async + polling with cancel) ──────────────
   const submit = async (e: React.BaseSyntheticEvent) => {
     e.preventDefault();
     if (isRunning) return;
@@ -504,6 +518,21 @@ export default function App() {
     setMissionError(null);
     setResponse(null);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const signal = controller.signal;
+
+    // Abortable 2s gap between polls. Resolves on timeout; rejects with
+    // AbortError the moment the user clicks CANCEL.
+    const abortableSleep = (ms: number) => new Promise<void>((resolve, reject) => {
+      if (signal.aborted) return reject(new DOMException('aborted', 'AbortError'));
+      const t = setTimeout(resolve, ms);
+      signal.addEventListener('abort', () => {
+        clearTimeout(t);
+        reject(new DOMException('aborted', 'AbortError'));
+      }, { once: true });
+    });
+
     try {
       // 1. Dispatch
       const res = await fetch(`${API_BASE_URL}/agent/run`, {
@@ -514,14 +543,18 @@ export default function App() {
           request: prompt,
           business_context: profileToContext(profile) ?? undefined,
         }),
+        signal,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const { run_id } = await res.json();
 
       // 2. Poll every 2s for up to 3 minutes
       for (let i = 0; i < 90; i++) {
-        await new Promise(r => setTimeout(r, 2000));
-        const poll = await fetch(`${API_BASE_URL}/agent/run/status/${run_id}`, { headers: apiHeaders() });
+        await abortableSleep(2000);
+        const poll = await fetch(`${API_BASE_URL}/agent/run/status/${run_id}`, {
+          headers: apiHeaders(),
+          signal,
+        });
         if (!poll.ok) throw new Error(`Poll failed: HTTP ${poll.status}`);
         const data = await poll.json();
         if (data.status === 'completed') { setResponse(data.result); return; }
@@ -529,17 +562,31 @@ export default function App() {
       }
       throw new Error('Mission timed out after 3 minutes.');
     } catch (err: unknown) {
-      setMissionError(err instanceof Error ? err.message : 'Connection failed.');
+      const aborted =
+        (err instanceof DOMException && err.name === 'AbortError') ||
+        (err instanceof Error && err.name === 'AbortError');
+      if (aborted) {
+        setMissionError('Mission cancelled.');
+      } else {
+        setMissionError(err instanceof Error ? err.message : 'Connection failed.');
+      }
     } finally {
+      abortRef.current = null;
       setIsRunning(false);
     }
   };
 
-  // ── Profile save (localStorage + API) ─────────────────────────
+  const cancelMission = () => {
+    abortRef.current?.abort();
+  };
+
+  // ── Profile save (API first, then localStorage) ───────────────
   const saveProfile = async () => {
     setProfileSaveError(null);
-    localStorage.setItem(PROFILE_KEY, JSON.stringify(profileDraft));
-    setProfile(profileDraft);
+    if (!profileComplete(profileDraft)) {
+      setProfileSaveError('Company name, what we do, and ICP are required.');
+      return;
+    }
     try {
       const res = await fetch(`${API_BASE_URL}/profile/${userId}`, {
         method: 'PUT',
@@ -559,6 +606,10 @@ export default function App() {
       setProfileSaveError(err instanceof Error ? err.message : 'Network error — profile may not be persisted.');
       return;
     }
+    // Only persist locally after the server confirms. Reloads now match what
+    // Supabase actually holds, instead of the last draft the user typed.
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(profileDraft));
+    setProfile(profileDraft);
     setProfileSaved(true);
     setTimeout(() => setProfileSaved(false), 2000);
   };
@@ -861,6 +912,9 @@ export default function App() {
                     <div className="log-header">
                       <span className="log-ts">{ts()}</span>
                       <span className="log-evt c-accent">MISSION INITIATED</span>
+                      <span className="log-evt" style={{ marginLeft: 'auto', color: 'var(--muted)' }}>
+                        ELAPSED {Math.floor(elapsedMs / 1000)}s / 180s
+                      </span>
                     </div>
                     <div className="log-mission">
                       <span className="log-field">INPUT</span>
@@ -1027,9 +1081,23 @@ export default function App() {
                       ? <span className="blink">EXEC…</span>
                       : <><span>DEPLOY</span><Send size={11} aria-hidden="true" /></>}
                   </button>
+                  {isRunning && (
+                    <button
+                      type="button"
+                      onClick={cancelMission}
+                      className="cmd-submit"
+                      style={{ marginLeft: 8, borderColor: 'var(--error)', color: 'var(--error)' }}
+                      title="Abort the in-flight mission"
+                    >
+                      <XCircle size={11} aria-hidden="true" />
+                      <span>CANCEL</span>
+                    </button>
+                  )}
                 </form>
                 <div className="cmd-hint">
-                  ENTER to deploy · select a template above to pre-fill · agents operate under enforced security policy
+                  {isRunning
+                    ? 'CANCEL aborts the request client-side · the backend run continues until it naturally terminates'
+                    : 'ENTER to deploy · select a template above to pre-fill · agents operate under enforced security policy'}
                 </div>
               </div>
             </>

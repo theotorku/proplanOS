@@ -34,6 +34,15 @@ def _strip_code_fence(text: str) -> str:
     return m.group(1).strip() if m else text.strip()
 
 
+def _task_signature(agent: str, payload: Dict[str, Any]) -> str:
+    """Stable `agent + payload` key used to dedupe tasks across planner iterations."""
+    try:
+        body = json.dumps(payload, sort_keys=True, default=str)
+    except Exception:
+        body = str(payload)
+    return f"{agent}::{body}"
+
+
 # -----------------------------
 # Observability Layer
 # -----------------------------
@@ -661,7 +670,32 @@ class Orchestrator:
         while steps < goal.max_steps:
             # Plan with context so the LLM can adapt
             context = {"memory": self.memory.get_context(), "step": steps}
-            tasks = self.planner.plan(full_request, context)
+            raw_tasks = self.planner.plan(full_request, context)
+
+            # Dedupe: skip tasks already completed successfully, and collapse
+            # duplicates within the same batch. Without this the planner can
+            # re-emit SALES-01 on every iteration, burning budget on work
+            # that's already done.
+            completed_sigs = {
+                _task_signature(h["task"]["agent"], h["task"]["payload"])
+                for h in self.memory.history
+                if h["result"]["success"]
+            }
+            seen_this_batch: set = set()
+            tasks: List[Task] = []
+            for t in raw_tasks:
+                sig = _task_signature(t.agent, t.payload)
+                if sig in completed_sigs or sig in seen_this_batch:
+                    continue
+                seen_this_batch.add(sig)
+                tasks.append(t)
+
+            # Planner only re-emitted already-completed work → goal is met.
+            if raw_tasks and not tasks:
+                self.logger.log("INFO", "Planner produced only duplicates; treating as goal_met",
+                                {"run_id": run_id, "duped": len(raw_tasks)})
+                final_status = "goal_met"
+                break
 
             # Dispatch and collect batch results (FIX 1)
             batch_results: List[TaskResult] = []

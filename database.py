@@ -115,6 +115,9 @@ class DatabaseProvider(Protocol):
 
     # Agent Sessions (run logging)
     def log_run(self, session: AgentSessionModel) -> None: ...
+    def create_run_session(self, session: AgentSessionModel) -> AgentSessionModel: ...
+    def update_run_session(self, run_id: str, **fields: Any) -> None: ...
+    def get_run_by_run_id(self, run_id: str) -> Optional[AgentSessionModel]: ...
 
 
 # ============================================================
@@ -172,6 +175,26 @@ class InMemoryDatabase:
     def log_run(self, session: AgentSessionModel) -> None:
         with self._lock:
             self.sessions.append(session)
+
+    def create_run_session(self, session: AgentSessionModel) -> AgentSessionModel:
+        with self._lock:
+            self.sessions.append(session)
+        return session
+
+    def update_run_session(self, run_id: str, **fields: Any) -> None:
+        with self._lock:
+            for s in self.sessions:
+                if s.run_id == run_id:
+                    for k, v in fields.items():
+                        setattr(s, k, v)
+                    return
+
+    def get_run_by_run_id(self, run_id: str) -> Optional[AgentSessionModel]:
+        with self._lock:
+            for s in self.sessions:
+                if s.run_id == run_id:
+                    return s
+        return None
 
     def get_profile(self, user_id: str) -> Optional["BusinessProfileModel"]:
         return self.profiles.get(user_id)
@@ -266,6 +289,36 @@ class SupabaseDatabase:
         except Exception as e:
             logging.error("SupabaseDatabase.log_run failed: %s", e, exc_info=True)
             raise
+
+    def create_run_session(self, session: AgentSessionModel) -> AgentSessionModel:
+        try:
+            data = session.model_dump(exclude_none=True)
+            self.client.table("agent_sessions").insert(data).execute()
+            return session
+        except Exception as e:
+            logging.error("SupabaseDatabase.create_run_session failed: %s", e, exc_info=True)
+            raise
+
+    def update_run_session(self, run_id: str, **fields: Any) -> None:
+        try:
+            self.client.table("agent_sessions").update(fields).eq("run_id", run_id).execute()
+        except Exception as e:
+            logging.error("SupabaseDatabase.update_run_session failed: %s", e, exc_info=True)
+            raise
+
+    def get_run_by_run_id(self, run_id: str) -> Optional[AgentSessionModel]:
+        try:
+            result = (
+                self.client.table("agent_sessions")
+                .select("*")
+                .eq("run_id", run_id)
+                .limit(1)
+                .execute()
+            )
+            return AgentSessionModel(**result.data[0]) if result.data else None
+        except Exception as e:
+            logging.warning("SupabaseDatabase.get_run_by_run_id failed: %s", e)
+            return None
 
     def get_profile(self, user_id: str) -> Optional["BusinessProfileModel"]:
         try:
