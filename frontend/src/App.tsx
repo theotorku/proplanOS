@@ -459,14 +459,30 @@ export default function App() {
   const sendSlackTest = useCallback(async () => {
     setSlackBusy(true);
     setSlackStatus({ kind: 'idle' });
-    // Save the profile first so the webhook URL in the draft is the one the backend reads.
+    // Save the profile first so the webhook URL in the draft is the one the
+    // backend reads. If the save fails, abort — otherwise the ping below would
+    // hit the *old* saved webhook and misleadingly report success.
     try {
-      await fetch(`${API_BASE_URL}/profile/${userId}`, {
+      const save = await fetch(`${API_BASE_URL}/profile/${userId}`, {
         method: 'PUT',
         headers: apiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ ...profileDraft, user_id: userId }),
       });
-    } catch { /* profile save failures surface via the ping below */ }
+      if (!save.ok) {
+        let detail = `HTTP ${save.status}`;
+        try {
+          const body = await save.json();
+          if (typeof body?.detail === 'string') detail = body.detail;
+        } catch { /* keep HTTP status */ }
+        setSlackStatus({ kind: 'err', msg: `Profile save failed: ${detail}` });
+        setSlackBusy(false);
+        return;
+      }
+    } catch (err: unknown) {
+      setSlackStatus({ kind: 'err', msg: err instanceof Error ? err.message : 'Profile save failed.' });
+      setSlackBusy(false);
+      return;
+    }
     const r = await slackRequest(`/integrations/slack/${encodeURIComponent(userId)}/test`);
     setSlackStatus(r.ok ? { kind: 'ok', msg: 'Test message sent.' } : { kind: 'err', msg: r.detail ?? 'Failed.' });
     setSlackBusy(false);
@@ -564,7 +580,7 @@ export default function App() {
         if (data.status === 'completed') { setResponse(data.result); return; }
         if (data.status === 'failed')    { throw new Error(data.error || 'Mission failed.'); }
       }
-      throw new Error('Mission timed out after 3 minutes.');
+      throw new Error('Mission timed out after 3 minutes. Check History — the run may still complete in the background.');
     } catch (err: unknown) {
       const aborted =
         (err instanceof DOMException && err.name === 'AbortError') ||
