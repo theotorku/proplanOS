@@ -6,7 +6,13 @@ Uses FastAPI's TestClient for synchronous, no-server-needed testing.
 
 import unittest
 import os
+# Force the in-memory backend + mock LLMs before api/db modules import.
+# Without popping the Supabase vars, get_database() returns SupabaseDatabase
+# and setUp()'s db.leads.clear() raises AttributeError — the entire suite
+# becomes non-runnable on any machine with Supabase creds configured.
 os.environ.pop("ANTHROPIC_API_KEY", None)
+os.environ.pop("SUPABASE_URL", None)
+os.environ.pop("SUPABASE_KEY", None)
 
 from fastapi.testclient import TestClient
 from api import app, db

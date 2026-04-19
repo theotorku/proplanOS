@@ -27,7 +27,7 @@ except ImportError:
 class AnthropicPlannerProvider:
     """Anthropic Claude adapter for the ProPlan LLMPlanner."""
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, api_key: str, model: str = "claude-sonnet-4-6"):
         if not Anthropic:
             raise ImportError(
                 "Please install 'anthropic' to use Anthropic providers.")
@@ -102,7 +102,7 @@ def _build_tool_examples(available_tools: str) -> str:
 class AnthropicAgentProvider:
     """Anthropic Claude adapter for ProPlan specialized Agents."""
 
-    def __init__(self, api_key: str, agent_name: str, available_tools: str, model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, api_key: str, agent_name: str, available_tools: str, model: str = "claude-sonnet-4-6"):
         if not Anthropic:
             raise ImportError(
                 "Please install 'anthropic' to use Anthropic providers.")

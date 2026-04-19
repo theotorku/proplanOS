@@ -330,13 +330,12 @@ class SupabaseDatabase:
 
     def upsert_profile(self, profile: "BusinessProfileModel") -> "BusinessProfileModel":
         try:
-            data = profile.model_dump(exclude_none=True)
-            # Empty strings are indistinguishable from "not set" for these fields.
-            # Drop them so a profile save doesn't require every optional column
-            # to exist on the deployed table — e.g. slack_webhook_url lands in
-            # migration 0005, and we don't want every PUT /profile to 5xx when
-            # that migration is still pending.
-            data = {k: v for k, v in data.items() if v != ""}
+            # Coerce empty strings to None so "clear this field" actually
+            # writes NULL — the previous strip-empties filter silently
+            # retained old values, which made slack_webhook_url (and any
+            # other nullable string) impossible to clear once saved.
+            raw = profile.model_dump()
+            data = {k: (None if isinstance(v, str) and v == "" else v) for k, v in raw.items()}
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
             self.client.table("business_profiles").upsert(data, on_conflict="user_id").execute()
             return profile
