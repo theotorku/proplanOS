@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import { useMemo } from 'react';
 import './dashboard.css';
 
 // Kept narrow on purpose — only the fields the dashboard reads.
