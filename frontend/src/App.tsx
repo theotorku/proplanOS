@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Terminal, Activity, Shield, Zap, CheckCircle, XCircle, RefreshCw, Users, Megaphone, Settings, Save, Download, MessageSquare, AlertTriangle } from 'lucide-react';
+import Onboarding from './onboarding/Onboarding';
+import MissionControl from './dashboard/MissionControl';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 const API_KEY = import.meta.env.VITE_API_KEY ?? '';
@@ -222,12 +224,31 @@ function formatDate(iso: string | null): string {
 }
 
 // ─── Component ───────────────────────────────────────────────────
+const ONBOARDED_KEY = 'proplan_onboarded';
+
+function hasOnboarded(): boolean {
+  try { return localStorage.getItem(ONBOARDED_KEY) === '1'; } catch { return true; }
+}
+
 export default function App() {
+  // Onboarding gate — first-run customers see the onboarding flow before
+  // the main shell mounts. Completion sets `proplan_onboarded` in localStorage.
+  const [onboarded, setOnboarded] = useState<boolean>(hasOnboarded);
+
+  // User identity (persistent across sessions) — needed by onboarding to
+  // PUT the final profile to /profile/{user_id}.
+  const [userId] = useState<string>(getOrCreateUserId);
+
+  if (!onboarded) {
+    return <Onboarding userId={userId} onComplete={() => setOnboarded(true)} />;
+  }
+
+  return <AppShell userId={userId} />;
+}
+
+function AppShell({ userId }: { userId: string }) {
   // View
   const [view, setView] = useState<View>('mission');
-
-  // User identity (persistent across sessions)
-  const [userId] = useState<string>(getOrCreateUserId);
 
   // Profile state
   const [profile, setProfile]           = useState<BusinessProfile>(loadProfile);
@@ -519,6 +540,7 @@ export default function App() {
 
   // Fetch on view switch
   useEffect(() => {
+    if (view === 'mission')   { fetchLeads(); fetchRuns(); }
     if (view === 'leads')     fetchLeads();
     if (view === 'campaigns') fetchCampaigns();
     if (view === 'history')   fetchRuns();
@@ -666,8 +688,6 @@ export default function App() {
   // ─── Render ───────────────────────────────────────────────────
   return (
     <div className="app-shell">
-      <div className="scanlines" aria-hidden="true" />
-
       {/* ── Header ── */}
       <header className="app-header">
         <div className="header-left">
@@ -906,25 +926,16 @@ export default function App() {
             <>
               <div className="output-feed" ref={outputRef}>
                 {!response && !isRunning && !missionError && (
-                  <div className="empty-state">
-                    <div className="terminal-hero">
-                      <div className="hero-border">{'─'.repeat(46)}</div>
-                      <p className="hero-system">PROPLAN OS</p>
-                      <p className="hero-sub">AUTONOMOUS MULTI-AGENT ORCHESTRATOR</p>
-                      <p className="hero-await">AWAITING MISSION INPUT <span className="blink">█</span></p>
-                      <div className="hero-border">{'─'.repeat(46)}</div>
-                    </div>
-                    <div className="templates-wrap">
-                      <p className="templates-label">─── MISSION TEMPLATES ───</p>
-                      {TEMPLATES.map((t, i) => (
-                        <button key={t} type="button" className="template-btn" onClick={() => useTemplate(t)}>
-                          <span className="template-num">{String(i + 1).padStart(2, '0')}</span>
-                          <span className="template-text">{t}</span>
-                          <Zap size={11} className="template-zap" />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  <MissionControl
+                    leads={leads}
+                    runs={runs}
+                    response={response}
+                    isRunning={isRunning}
+                    companyName={profile.company_name}
+                    agents={AGENTS}
+                    templates={TEMPLATES}
+                    onUseTemplate={useTemplate}
+                  />
                 )}
 
                 {isRunning && (

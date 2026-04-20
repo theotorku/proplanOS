@@ -1,0 +1,565 @@
+/* ProPlan OS — Mission Control dashboard
+ * Navy/gold/serif layout, lives inside the existing .app-shell under the
+ * mission view's .output-feed. Uses global design tokens.
+ */
+
+.mc-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 20px;
+  padding: 4px 0 24px;
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.mc-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* ─── Hero ─────────────────────────────────────────────── */
+.mc-hero {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 6px 2px 14px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.mc-hero-title {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  font-style: italic;
+  font-size: 28px;
+  line-height: 1.1;
+  color: var(--text);
+  letter-spacing: 0.005em;
+}
+
+.mc-hero-title em {
+  color: var(--accent);
+  font-style: italic;
+}
+
+.mc-hero-sub {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-top: 6px;
+  font-weight: 500;
+}
+
+.mc-hero-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.mc-hero-meta .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success);
+}
+
+/* ─── Card primitive ───────────────────────────────────── */
+.mc-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mc-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface-2);
+}
+
+.mc-card-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.mc-card-meta {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+}
+
+.mc-card-body { padding: 14px 16px; }
+
+/* ─── KPI strip ────────────────────────────────────────── */
+.mc-kpis {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.mc-kpi {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.mc-kpi::after {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent-glow), transparent);
+  opacity: 0.55;
+}
+
+.mc-kpi-label {
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.mc-kpi-value {
+  font-family: var(--font-serif);
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.1;
+}
+
+.mc-kpi-delta {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.mc-kpi-delta.up   { color: var(--success); }
+.mc-kpi-delta.down { color: var(--error); }
+
+/* ─── Agent Fleet ──────────────────────────────────────── */
+.mc-agents {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  padding: 14px;
+}
+
+.mc-agent {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 12px 14px;
+  background: var(--bg-3);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.mc-agent-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mc-agent-code {
+  width: 32px; height: 32px;
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+  letter-spacing: 0.08em;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.mc-agent-name {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--text);
+}
+
+.mc-agent-role {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.mc-agent-state {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 9px; letter-spacing: 0.14em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.mc-agent-state .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--muted-2);
+}
+.mc-agent-state.active { color: var(--success); }
+.mc-agent-state.active .dot {
+  background: var(--success);
+  box-shadow: 0 0 6px var(--success);
+}
+
+.mc-agent-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  font-size: 10px;
+}
+
+.mc-agent-metric .k {
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-size: 8.5px;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.mc-agent-metric .v {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+/* ─── Pipeline chart ───────────────────────────────────── */
+.mc-chart {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mc-chart-svg { width: 100%; height: 160px; display: block; }
+
+.mc-chart-bar { fill: var(--accent); opacity: 0.85; }
+.mc-chart-bar.dim { fill: var(--muted-2); opacity: 0.6; }
+.mc-chart-grid { stroke: var(--border-soft); stroke-width: 1; }
+.mc-chart-label {
+  fill: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+}
+
+.mc-chart-legend {
+  display: flex;
+  gap: 14px;
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.mc-chart-legend .sw {
+  width: 10px; height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+/* ─── Live feed ────────────────────────────────────────── */
+.mc-feed {
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.mc-feed-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 11px;
+}
+.mc-feed-row:first-child { border-top: none; }
+
+.mc-feed-ts {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  width: 74px;
+  flex-shrink: 0;
+}
+
+.mc-feed-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  padding: 2px 7px;
+  border-radius: 2px;
+  border: 1px solid;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.mc-feed-msg {
+  flex: 1;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-feed-cost {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.mc-feed-empty {
+  padding: 26px 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+/* ─── Live lead ────────────────────────────────────────── */
+.mc-lead-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mc-lead-name {
+  font-family: var(--font-serif);
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.15;
+}
+
+.mc-lead-source {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.mc-lead-score {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.mc-lead-score-num {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent);
+  width: 48px;
+}
+
+.mc-lead-score-track {
+  flex: 1;
+  height: 4px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.mc-lead-score-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.mc-lead-band {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  padding: 2px 7px;
+  border-radius: 2px;
+  border: 1px solid;
+  text-transform: uppercase;
+}
+
+/* ─── Deploy / composer card ───────────────────────────── */
+.mc-deploy {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mc-deploy-hint {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.mc-deploy-hint strong {
+  color: var(--text);
+  font-weight: 600;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 13px;
+}
+
+.mc-deploy-templates {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.mc-template {
+  font-size: 10px;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.12s, background 0.12s;
+  line-height: 1.4;
+}
+.mc-template:hover {
+  border-color: rgba(246, 195, 68, 0.4);
+  background: var(--accent-dim);
+}
+
+/* ─── Mission Replay ───────────────────────────────────── */
+.mc-replay {
+  padding: 12px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mc-replay-step {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-soft);
+  border-left: 2px solid var(--agent-color, var(--accent));
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.mc-replay-idx {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  width: 22px;
+  flex-shrink: 0;
+}
+
+.mc-replay-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 2px 6px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.mc-replay-action {
+  flex: 1;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-replay-status {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.mc-replay-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* ─── Queue ────────────────────────────────────────────── */
+.mc-queue {
+  padding: 10px 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mc-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.mc-queue-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted-2);
+  flex-shrink: 0;
+}
+.mc-queue-row.live .mc-queue-dot {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+}
+
+.mc-queue-label {
+  flex: 1;
+  color: var(--text);
+}
+
+.mc-queue-state {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+/* ─── Responsive ───────────────────────────────────────── */
+@media (max-width: 1100px) {
+  .mc-wrap { grid-template-columns: 1fr; }
+  .mc-kpis { grid-template-columns: repeat(2, 1fr); }
+  .mc-agents { grid-template-columns: 1fr; }
+}
