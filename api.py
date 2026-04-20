@@ -86,6 +86,41 @@ class CampaignCreateRequest(BaseModel):
     status: str = Field(default="draft", description="Campaign status")
 
 
+class OnboardScanRequest(BaseModel):
+    """Request body for POST /onboard/scan."""
+    url: str = Field(..., min_length=1, description="Business website URL")
+
+
+class OnboardReview(BaseModel):
+    author: str
+    rating: int
+    text: str
+    when: Optional[str] = None
+
+
+class OnboardScanResponse(BaseModel):
+    """Result of an onboarding URL scan. Any field may be empty — the UI
+    exposes inline edit controls so the operator can correct / fill gaps."""
+    company: Optional[str] = None
+    url: str
+    owner: Optional[str] = None
+    location: Optional[str] = None
+    vertical: Optional[str] = None
+    services: Optional[str] = None
+    years_operating: Optional[str] = None
+    review: Optional[OnboardReview] = None
+
+
+class OnboardPrefillResponse(BaseModel):
+    """Pre-seeded onboarding state handed to a concierge-pilot customer."""
+    token: str
+    url: Optional[str] = None
+    company: Optional[str] = None
+    vertical: Optional[str] = None
+    goals: Optional[List[str]] = None
+    integrations: Optional[List[str]] = None
+
+
 # -----------------------------
 # Database Connection
 # -----------------------------
@@ -268,7 +303,10 @@ app = FastAPI(
 
 # CORS — restrict origins via ALLOWED_ORIGINS env var (comma-separated).
 # Defaults to localhost dev server. Never use wildcard with credentials.
-_raw_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173")
+_raw_origins = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173",
+)
 _allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 app.add_middleware(
@@ -406,6 +444,196 @@ def upsert_profile(user_id: str, body: BusinessProfileModel):
             status_code=500,
             detail=f"Profile save failed: {type(e).__name__}: {e}",
         ) from e
+
+
+# -----------------------------
+# Onboarding: URL scan + prefill
+# -----------------------------
+# Pilot-stage: concierge onboarding for the first 10 customers.
+# Theo pre-seeds a small dict of tokens → profiles so a signed URL can
+# open the onboarding flow with real customer data. No DB table yet.
+
+_ONBOARD_PREFILL: Dict[str, Dict[str, Any]] = {
+    # Example — replace with real tokens per pilot customer.
+    # "cedar-ridge": {
+    #     "url": "https://cedarridgeroofing.com",
+    #     "company": "Cedar Ridge Roofing",
+    #     "vertical": "roofing",
+    #     "goals": ["respond", "book", "nurture"],
+    #     "integrations": ["jobber", "gcal", "twilio"],
+    # },
+}
+
+
+def _normalize_url(raw: str) -> tuple[str, str]:
+    """Return (display_url, domain) for a user-supplied site URL."""
+    s = (raw or "").strip()
+    if not s:
+        return ("", "")
+    # Attach scheme so urlparse works on bare domains.
+    if not s.lower().startswith(("http://", "https://")):
+        s = "https://" + s
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(s)
+        domain = (parsed.netloc or "").lower()
+        if domain.startswith("www."):
+            domain = domain[4:]
+        return (s, domain)
+    except Exception:
+        return (s, s)
+
+
+def _guess_vertical(types: Sequence[str]) -> Optional[str]:
+    """Map Google Places `types` → a ProPlan vertical id."""
+    t = {x.lower() for x in (types or [])}
+    if t & {"roofing_contractor", "plumber", "electrician",
+            "general_contractor", "hvac_contractor", "home_services"}:
+        return "roofing"  # "home services" bucket
+    if t & {"real_estate_agency", "real_estate_agent"}:
+        return "realestate"
+    if t & {"dentist", "doctor", "hospital", "physiotherapist",
+            "optometrist", "health"}:
+        return "healthcare"
+    return None
+
+
+def _pick_review(reviews: Sequence[Dict[str, Any]]) -> Optional[OnboardReview]:
+    """Pick the most recent review with text — prefer 5-star, fall back
+    to the most recent of any rating. Review becomes the proof moment
+    shown after the scan completes."""
+    if not reviews:
+        return None
+    with_text = [r for r in reviews if (r.get("text") or "").strip()]
+    if not with_text:
+        return None
+    # Google returns `time` as a unix timestamp; sort desc so most recent first.
+    with_text.sort(key=lambda r: r.get("time") or 0, reverse=True)
+    five_stars = [r for r in with_text if (r.get("rating") or 0) >= 5]
+    chosen = (five_stars or with_text)[0]
+    return OnboardReview(
+        author=str(chosen.get("author_name") or "A customer"),
+        rating=int(chosen.get("rating") or 0),
+        text=str(chosen.get("text") or "").strip(),
+        when=chosen.get("relative_time_description"),
+    )
+
+
+def _fetch_site_title(url: str, client: "httpx.Client") -> Optional[str]:
+    """Best-effort grab of the site <title> for a backup company name."""
+    try:
+        resp = client.get(url, timeout=4.0, follow_redirects=True,
+                          headers={"User-Agent": "ProPlan-Onboarding/1.0"})
+        if resp.status_code >= 400:
+            return None
+        import re
+        m = re.search(r"<title[^>]*>(.*?)</title>", resp.text, re.IGNORECASE | re.DOTALL)
+        if not m:
+            return None
+        # Strip site suffixes like "… | Home" or "… - Official Site".
+        title = re.sub(r"\s+", " ", m.group(1)).strip()
+        title = re.split(r"\s[|\-–·]\s", title)[0].strip()
+        return title or None
+    except Exception:
+        return None
+
+
+def _google_places_lookup(query: str, api_key: str,
+                          client: "httpx.Client") -> Dict[str, Any]:
+    """Run Text Search + Place Details against Google Places (classic API).
+    Returns {} on any error so the scan degrades gracefully."""
+    try:
+        find = client.get(
+            "https://maps.googleapis.com/maps/api/place/findplacefromtext/json",
+            params={
+                "input": query,
+                "inputtype": "textquery",
+                "fields": "place_id,name,formatted_address,types",
+                "key": api_key,
+            },
+            timeout=5.0,
+        )
+        candidates = find.json().get("candidates") or []
+        if not candidates:
+            return {}
+        place_id = candidates[0].get("place_id")
+        if not place_id:
+            return {}
+        details = client.get(
+            "https://maps.googleapis.com/maps/api/place/details/json",
+            params={
+                "place_id": place_id,
+                "fields": ("name,formatted_address,types,reviews,"
+                           "url,international_phone_number,website,"
+                           "user_ratings_total"),
+                "key": api_key,
+            },
+            timeout=5.0,
+        )
+        return details.json().get("result") or {}
+    except Exception as e:
+        logging.warning("Google Places lookup failed for %r: %s", query, e)
+        return {}
+
+
+@app.post("/onboard/scan", response_model=OnboardScanResponse, tags=["Onboarding"])
+def onboard_scan(body: OnboardScanRequest):
+    """Scan a business URL. Returns any fields we could recover from the
+    site title + Google Places. Missing fields come back null and the
+    onboarding UI lets the operator fill them inline."""
+    display_url, domain = _normalize_url(body.url)
+    if not domain:
+        raise HTTPException(status_code=400, detail="Invalid URL.")
+
+    if httpx is None:
+        # httpx is a hard requirement for the scan; 501 mirrors the Slack path.
+        raise HTTPException(
+            status_code=501,
+            detail="httpx is not installed on the server — scan unavailable.",
+        )
+
+    api_key = os.environ.get("GOOGLE_PLACES_API_KEY", "").strip()
+
+    with httpx.Client() as client:
+        site_title = _fetch_site_title(display_url, client)
+        place: Dict[str, Any] = {}
+        if api_key:
+            # Query Places by the site title first (more specific), then
+            # fall back to the bare domain.
+            place = (_google_places_lookup(site_title, api_key, client)
+                     if site_title else {})
+            if not place:
+                place = _google_places_lookup(domain, api_key, client)
+        elif not site_title:
+            logging.warning(
+                "onboard_scan: GOOGLE_PLACES_API_KEY not set and site title "
+                "unreadable — returning empty profile for %s", domain)
+
+    company = place.get("name") or site_title
+    location = place.get("formatted_address")
+    vertical = _guess_vertical(place.get("types") or [])
+    review = _pick_review(place.get("reviews") or [])
+
+    return OnboardScanResponse(
+        company=company,
+        url=domain,
+        owner=None,          # Not derivable from Places; left for manual edit.
+        location=location,
+        vertical=vertical,
+        services=None,
+        years_operating=None,
+        review=review,
+    )
+
+
+@app.get("/onboard/prefill/{token}", response_model=OnboardPrefillResponse,
+         tags=["Onboarding"])
+def onboard_prefill(token: str):
+    """Look up a pilot-customer pre-seed by token. 404 if unknown."""
+    data = _ONBOARD_PREFILL.get(token)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Unknown onboarding token.")
+    return OnboardPrefillResponse(token=token, **data)
 
 
 @app.get("/runs", tags=["History"], response_model=list[AgentSessionModel], dependencies=[Depends(verify_api_key)])
