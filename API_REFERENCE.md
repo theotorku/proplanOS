@@ -394,6 +394,47 @@ Stream campaigns as a CSV download.
 
 Response: `text/csv` with timestamped filename. Columns: `name, status, id, created_at, updated_at`.
 
+### `POST /onboard/scan`
+
+Public (no API key). Takes a business URL and returns any fields we could recover: site title → `company`, Google Places → `location`, `vertical`, `services`, `years_operating`, plus one recent `review`. Missing fields come back `null`; the onboarding UI exposes inline edit controls so the operator fills gaps.
+
+**Request:** `OnboardScanRequest`
+```json
+{ "url": "https://acme.com" }
+```
+
+**Response:** `OnboardScanResponse`
+```json
+{
+  "company": "Acme Roofing",
+  "url": "acme.com",
+  "owner": null,
+  "location": "Austin, TX",
+  "vertical": "Roofing Contractor",
+  "services": null,
+  "years_operating": null,
+  "review": { "author": "Jane D.", "rating": 5, "text": "Best roofers in town.", "when": "2 weeks ago" }
+}
+```
+
+Returns 400 on invalid URL. Without `GOOGLE_PLACES_API_KEY`, only `company` / `url` are populated.
+
+### `GET /onboard/prefill/{token}`
+
+Public (no API key). Look up a pilot-customer pre-seed by token. Used to hand a concierge customer a link that opens onboarding with their URL/company/goals already filled in. Returns 404 if unknown.
+
+**Response:** `OnboardPrefillResponse`
+```json
+{
+  "token": "pilot-01",
+  "url": "https://acme.com",
+  "company": "Acme Roofing",
+  "vertical": "Roofing Contractor",
+  "goals": ["More qualified leads", "Automate follow-up"],
+  "integrations": ["slack"]
+}
+```
+
 ### `POST /integrations/slack/{user_id}/test`
 
 Send a short ping to the user's configured Slack incoming webhook. Returns `{"status": "sent"}` on success, 400 if the webhook isn't configured or doesn't start with `https://hooks.slack.com/`, 502 if Slack rejects the message.

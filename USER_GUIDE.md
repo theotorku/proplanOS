@@ -25,16 +25,25 @@ You don't choose the agents. The **Planner** reads your request and decides whic
 
 ### Step 1: Open ProplanOS
 
-Navigate to the ProplanOS dashboard in your browser. You'll see the **Mission Control** interface — a terminal-themed command center.
+Navigate to the ProplanOS dashboard in your browser.
 
-The header shows:
-- **SYSTEM ONLINE** — the backend is connected
-- **4 AGENTS ACTIVE** — all agents are registered and ready
+**First-time visit:** you'll be walked through **concierge onboarding** — paste your business URL, the system scans it (site title + Google Places signals), you confirm/edit the details, and your business profile is saved. Pilot customers are sent a pre-seeded link (`/onboard/prefill/{token}`) so most fields arrive pre-filled.
 
-The sidebar shows:
-- System status
-- Agent registry (Sales, Marketing, Support, Ops)
-- Run stats (after your first mission)
+**Returning visit:** you land directly in **Mission Control** — a navy/gold live operations dashboard with:
+
+| Panel | What it shows |
+|-------|--------------|
+| **Hero** | "Mission Control" serif headline, your company name, fleet status pill |
+| **KPI strip** | Total leads · Runs today · All-time spend · Fleet status |
+| **Agent Fleet** | Sales / Marketing / Support / Ops cards with per-agent run count and spend |
+| **Pipeline · 14 days** | SVG bar chart of runs per day over the last two weeks |
+| **Live Feed** | Last 6 runs with timestamp, status, request text, cost |
+| **Top Live Lead** | Highest-ICP lead in the pipeline (score bar + HIGH/MID/LOW band) |
+| **Deploy Mission** | Template quick-picks (click to pre-fill the command bar) |
+| **Mission Replay** | Color-coded steps of the last completed mission |
+| **Queue** | Active / idle state for queued missions |
+
+The sidebar shows system status, the agent registry, and run stats. The terminal composer (`[MISSION]>`) stays pinned at the bottom for dispatching new missions.
 
 ### Step 2: Run Your First Mission
 
@@ -85,15 +94,15 @@ At the bottom, the **Cost Breakdown** shows how much each task cost and the tota
 
 ---
 
-## Three Views
+## Five Views
 
-Use the tabs in the header to switch between views:
+Use the tabs in the header to switch between views: **Mission · Leads · Campaigns · History · Profile**.
 
 ### Mission (default)
 
-The main command interface. Run missions, see results, track costs.
+The live operations dashboard (see Step 1 for the full panel breakdown). Run missions, watch them execute, and track everything on one screen. While a mission is in flight, the dashboard gives way to a real-time processing log; when it completes, the task-by-task results and cost breakdown render inline. Press the PROPLAN brand in the top-left to return to the dashboard.
 
-**Mission templates** are shown when no mission is running — click any template to pre-fill the command bar with a ready-to-deploy objective.
+**Template quick-picks** appear in the Deploy Mission card — click any template to pre-fill the terminal composer with a ready-to-deploy objective.
 
 ### Leads
 
@@ -135,6 +144,16 @@ A registry of marketing campaigns.
 Campaigns can be created via the API (`POST /campaigns`). Future versions will allow creating campaigns directly from the UI.
 
 **Export CSV:** The CAMPAIGNS toolbar also has an EXPORT CSV button for downloading the registry as a timestamped file.
+
+### History
+
+A chronological log of every orchestrator run for the signed-in user (last 20 by default). Each row shows the run ID, timestamp, status, total cost, and the request that triggered it — useful for auditing what the fleet has been doing and what it spent.
+
+### Profile
+
+Your business context — company name, what you do, ICP, target industries, geography, lead signals, value proposition, communication tone, and Slack webhook URL. This context is silently injected into every agent run, so agents don't need to re-learn who you are. Fill it once, then forget it.
+
+Concierge onboarding pre-fills this tab for pilot customers; you can edit any field later.
 
 ---
 

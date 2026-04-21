@@ -73,7 +73,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173 — terminal-themed mission control UI. Type a mission and hit send.
+Open http://localhost:5173. First-time visit runs the **concierge onboarding flow** (paste a URL → `/onboard/scan` enriches it via HTML title + Google Places → confirm/edit → save). Completion writes `proplan_onboarded=1` to localStorage; subsequent visits drop you straight into the navy/gold **Mission Control** dashboard. To re-trigger onboarding during dev, clear that key in devtools.
 
 ---
 

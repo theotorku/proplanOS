@@ -47,13 +47,14 @@
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| **LLM** | Anthropic Claude (claude-sonnet-4) via `anthropic` SDK |
-| **Backend** | Python 3.10+, FastAPI, Pydantic |
-| **Database** | Supabase (Postgres) with in-memory dev fallback |
-| **Async Queue** | Celery + Redis (optional) |
-| **Frontend** | React 19, TypeScript, Vite, Tailwind CSS |
+| Layer           | Technology                                                                                                        |
+| --------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **LLM**         | Anthropic Claude (claude-sonnet-4) via `anthropic` SDK                                                            |
+| **Backend**     | Python 3.10+, FastAPI, Pydantic                                                                                   |
+| **Database**    | Supabase (Postgres) with in-memory dev fallback                                                                   |
+| **Async Queue** | Celery + Redis (optional)                                                                                         |
+| **Frontend**    | React 19, TypeScript, Vite, Tailwind CSS (navy/gold operator console — Inter + Playfair Display + JetBrains Mono) |
+| **Enrichment**  | Google Places API (optional, for `/onboard/scan`)                                                                 |
 
 ---
 
@@ -120,7 +121,10 @@ proplanOS/
 ├── .gitignore
 │
 ├── frontend/                 # React 19 + TypeScript + Vite + Tailwind
-│   ├── src/App.tsx           # Terminal-themed mission control UI
+│   ├── src/App.tsx           # App shell: routing, profile, leads, campaigns, history
+│   ├── src/dashboard/        # Mission Control live dashboard (KPIs, fleet, pipeline, feed)
+│   ├── src/onboarding/       # Concierge onboarding flow (URL scan + prefill)
+│   ├── src/index.css         # Global navy/gold tokens
 │   ├── package.json
 │   └── ...
 │
@@ -138,43 +142,45 @@ proplanOS/
 
 ## Agents
 
-| Agent | Name | Default Tool | Purpose |
-|-------|------|-------------|---------|
-| `SalesAgent` | `sales` | `find_leads_tool` | Lead scraping, scoring, outreach |
-| `MarketingAgent` | `marketing` | `generate_copy_tool` | Ad copy, campaign creation |
-| `SupportAgent` | `support` | `search_knowledge_base` | Knowledge retrieval, chat responses |
-| `OpsAgent` | `ops` | `schedule_task` | Scheduling, workflow automation |
+| Agent            | Name        | Default Tool            | Purpose                             |
+| ---------------- | ----------- | ----------------------- | ----------------------------------- |
+| `SalesAgent`     | `sales`     | `find_leads_tool`       | Lead scraping, scoring, outreach    |
+| `MarketingAgent` | `marketing` | `generate_copy_tool`    | Ad copy, campaign creation          |
+| `SupportAgent`   | `support`   | `search_knowledge_base` | Knowledge retrieval, chat responses |
+| `OpsAgent`       | `ops`       | `schedule_task`         | Scheduling, workflow automation     |
 
 ## Tools
 
-| Tool | Schema | Cost | Description |
-|------|--------|------|-------------|
-| `find_leads_tool` | `{query: str}` | $0.02 | Returns scored leads |
-| `generate_copy_tool` | `{input: str}` | $0.01 | Generates optimized ad copy |
-| `search_knowledge_base` | `{query: str}` | $0.005 | Searches KB and returns answers |
-| `schedule_task` | `{task_name: str}` | $0.005 | Schedules a task |
-| `run_workflow` | `{workflow_name: str}` | $0.01 | Executes an automated workflow |
+| Tool                    | Schema                 | Cost   | Description                     |
+| ----------------------- | ---------------------- | ------ | ------------------------------- |
+| `find_leads_tool`       | `{query: str}`         | $0.02  | Returns scored leads            |
+| `generate_copy_tool`    | `{input: str}`         | $0.01  | Generates optimized ad copy     |
+| `search_knowledge_base` | `{query: str}`         | $0.005 | Searches KB and returns answers |
+| `schedule_task`         | `{task_name: str}`     | $0.005 | Schedules a task                |
+| `run_workflow`          | `{workflow_name: str}` | $0.01  | Executes an automated workflow  |
 
 ---
 
 ## API Endpoints
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| `GET` | `/health` | No | Health check |
-| `POST` | `/agent/run` | API Key | Run orchestrator (sync) |
-| `POST` | `/agent/run/async` | API Key | Queue orchestrator run (Celery) |
-| `GET` | `/agent/run/{task_id}` | API Key | Poll async run status |
-| `GET` | `/leads` | API Key | List leads (with `?min_score=` filter) |
-| `GET` | `/leads/export.csv` | API Key | Download leads as CSV (same filters) |
-| `POST` | `/campaigns` | API Key | Create a campaign |
-| `GET` | `/campaigns` | API Key | List campaigns |
-| `GET` | `/campaigns/export.csv` | API Key | Download campaigns as CSV |
-| `GET` | `/profile/{user_id}` | API Key | Fetch business profile |
-| `PUT` | `/profile/{user_id}` | API Key | Upsert business profile |
-| `GET` | `/runs` | API Key | List recent orchestrator runs for a user |
-| `POST` | `/integrations/slack/{user_id}/test` | API Key | Send a Slack webhook ping |
-| `POST` | `/integrations/slack/{user_id}/leads` | API Key | Post a top-N lead digest to Slack |
+| Method | Path                                  | Auth    | Description                                              |
+| ------ | ------------------------------------- | ------- | -------------------------------------------------------- |
+| `GET`  | `/health`                             | No      | Health check                                             |
+| `POST` | `/agent/run`                          | API Key | Run orchestrator (sync)                                  |
+| `POST` | `/agent/run/async`                    | API Key | Queue orchestrator run (Celery)                          |
+| `GET`  | `/agent/run/{task_id}`                | API Key | Poll async run status                                    |
+| `GET`  | `/leads`                              | API Key | List leads (with `?min_score=` filter)                   |
+| `GET`  | `/leads/export.csv`                   | API Key | Download leads as CSV (same filters)                     |
+| `POST` | `/campaigns`                          | API Key | Create a campaign                                        |
+| `GET`  | `/campaigns`                          | API Key | List campaigns                                           |
+| `GET`  | `/campaigns/export.csv`               | API Key | Download campaigns as CSV                                |
+| `GET`  | `/profile/{user_id}`                  | API Key | Fetch business profile                                   |
+| `PUT`  | `/profile/{user_id}`                  | API Key | Upsert business profile                                  |
+| `GET`  | `/runs`                               | API Key | List recent orchestrator runs for a user                 |
+| `POST` | `/integrations/slack/{user_id}/test`  | API Key | Send a Slack webhook ping                                |
+| `POST` | `/integrations/slack/{user_id}/leads` | API Key | Post a top-N lead digest to Slack                        |
+| `POST` | `/onboard/scan`                       | No      | Enrich a business URL with title + Google Places signals |
+| `GET`  | `/onboard/prefill/{token}`            | No      | Fetch a pilot-customer pre-seeded onboarding state       |
 
 **Quick smoke test:**
 
@@ -192,14 +198,15 @@ curl http://localhost:8000/leads
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | No | Enables real Claude LLM planning. Falls back to mock LLMs. |
-| `SUPABASE_URL` | No | Supabase project URL. Falls back to in-memory DB. |
-| `SUPABASE_KEY` | No | Supabase service key. |
-| `API_SECRET_KEY` | No | Enables `X-API-Key` header auth. Skipped if not set. |
-| `ALLOWED_ORIGINS` | No | CORS origins (comma-separated). Defaults to `http://localhost:5173`. |
-| `REDIS_URL` | No | Redis URL for Celery async queue. Defaults to `redis://localhost:6379/0`. |
+| Variable                | Required | Description                                                                                                               |
+| ----------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`     | No       | Enables real Claude LLM planning. Falls back to mock LLMs.                                                                |
+| `SUPABASE_URL`          | No       | Supabase project URL. Falls back to in-memory DB.                                                                         |
+| `SUPABASE_KEY`          | No       | Supabase service key.                                                                                                     |
+| `API_SECRET_KEY`        | No       | Enables `X-API-Key` header auth. Skipped if not set.                                                                      |
+| `ALLOWED_ORIGINS`       | No       | CORS origins (comma-separated). Defaults to `http://localhost:5173,http://127.0.0.1:5173`.                                |
+| `REDIS_URL`             | No       | Redis URL for Celery async queue. Defaults to `redis://localhost:6379/0`.                                                 |
+| `GOOGLE_PLACES_API_KEY` | No       | Enables richer `/onboard/scan` results (location, vertical, one recent review). Falls back to HTML-title scrape if unset. |
 
 ---
 
@@ -207,11 +214,11 @@ curl http://localhost:8000/leads
 
 The `SecurityPolicy` enforces three constraints before every tool execution:
 
-| Check | What It Does |
-|-------|-------------|
-| **Permissions** | `can_use(agent, tool)` — Is this agent allowed to use this tool? |
+| Check             | What It Does                                                        |
+| ----------------- | ------------------------------------------------------------------- |
+| **Permissions**   | `can_use(agent, tool)` — Is this agent allowed to use this tool?    |
 | **Rate Limiting** | `check_rate_limit(agent)` — Has this agent exceeded its call quota? |
-| **Budget** | `check_budget()` — Is the total cost within the limit? |
+| **Budget**        | `check_budget()` — Is the total cost within the limit?              |
 
 ```python
 policy = SecurityPolicy(
@@ -244,17 +251,17 @@ Both default to `claude-sonnet-4-20250514`. Without an `ANTHROPIC_API_KEY`, the 
 
 ## Testing
 
-| Area | Tests |
-|------|-------|
+| Area            | Tests                                                |
+| --------------- | ---------------------------------------------------- |
 | Evaluator logic | 5 — all/any success, partial failures, empty batches |
-| Retry loop | 2 — records once, succeeds on retry |
-| LLM injection | 2 — custom provider, correct defaults per agent |
-| Security | 3 — permissions, rate limits, budget |
-| End-to-end | 1 — full orchestration run |
-| API Health | 1 |
-| API Agent Run | 3 — success, auto-stored leads, validation |
-| API Leads | 3 — list, post-run discovery, min_score filter |
-| API Campaigns | 4 — create, defaults, list, empty list |
+| Retry loop      | 2 — records once, succeeds on retry                  |
+| LLM injection   | 2 — custom provider, correct defaults per agent      |
+| Security        | 3 — permissions, rate limits, budget                 |
+| End-to-end      | 1 — full orchestration run                           |
+| API Health      | 1                                                    |
+| API Agent Run   | 3 — success, auto-stored leads, validation           |
+| API Leads       | 3 — list, post-run discovery, min_score filter       |
+| API Campaigns   | 4 — create, defaults, list, empty list               |
 
 ```bash
 python -m unittest test_orchestrator test_api -v
