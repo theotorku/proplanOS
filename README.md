@@ -181,6 +181,13 @@ proplanOS/
 | `POST` | `/integrations/slack/{user_id}/leads` | API Key | Post a top-N lead digest to Slack                        |
 | `POST` | `/onboard/scan`                       | No      | Enrich a business URL with title + Google Places signals |
 | `GET`  | `/onboard/prefill/{token}`            | No      | Fetch a pilot-customer pre-seeded onboarding state       |
+| `POST` | `/agent/chat/start`                   | No      | Open a chat conversation (returns conversation_id)       |
+| `POST` | `/agent/chat/message`                 | No      | Stream an assistant reply (SSE: token/done/error frames) |
+| `GET`  | `/agent/chat/history/{conversation_id}` | No    | Fetch message history for a conversation                 |
+| `POST` | `/agent/chat/capture_lead`            | No      | Submit contact form → lead + Slack notify                |
+| `POST` | `/agent/chat/book_call`               | No      | Record booking intent + return Calendly URL             |
+| `POST` | `/agent/chat/escalate`                | No      | Post the transcript to Slack for human handoff           |
+| `POST` | `/agent/chat/feedback`                | No      | Store thumbs up/down on an assistant message             |
 
 **Quick smoke test:**
 
@@ -207,6 +214,12 @@ curl http://localhost:8000/leads
 | `ALLOWED_ORIGINS`       | No       | CORS origins (comma-separated). Defaults to `http://localhost:5173,http://127.0.0.1:5173`.                                |
 | `REDIS_URL`             | No       | Redis URL for Celery async queue. Defaults to `redis://localhost:6379/0`.                                                 |
 | `GOOGLE_PLACES_API_KEY` | No       | Enables richer `/onboard/scan` results (location, vertical, one recent review). Falls back to HTML-title scrape if unset. |
+| `CHAT_MODEL`            | No       | Claude model for `/agent/chat/message` stream. Defaults to `claude-sonnet-4-6`.                                           |
+| `CALENDLY_URL`          | No       | Scheduling link returned by `/agent/chat/book_call`. Defaults to `https://calendly.com/proplan/intro`.                    |
+| `CHAT_SLACK_WEBHOOK_URL`| No       | Incoming-webhook URL for chat escalations, lead captures, and booking notifications.                                      |
+| `CHAT_RATE_LIMIT_PER_CONVO` | No   | Max user messages per conversation. Defaults to `30`.                                                                     |
+| `CHAT_IP_CONVOS_PER_HOUR`   | No   | Max new conversations per IP per hour. Defaults to `100`.                                                                 |
+| `CHAT_COST_CAP_USD`     | No       | Per-conversation cost cap in USD (Sonnet input+output). Defaults to `0.30`.                                               |
 
 ---
 

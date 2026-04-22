@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Terminal, Activity, Shield, Zap, CheckCircle, XCircle, RefreshCw, Users, Megaphone, Settings, Save, Download, MessageSquare, AlertTriangle } from 'lucide-react';
 import Onboarding from './onboarding/Onboarding';
 import MissionControl from './dashboard/MissionControl';
+import ChatPage from './pages/Chat';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 const API_KEY = import.meta.env.VITE_API_KEY ?? '';
@@ -231,6 +232,12 @@ function hasOnboarded(): boolean {
 }
 
 export default function App() {
+  // /chat is a standalone shareable page that bypasses the operator console
+  // entirely — it's for prospects/visitors, not customer operators.
+  if (typeof window !== 'undefined' && window.location.pathname === '/chat') {
+    return <ChatPage />;
+  }
+
   // Onboarding gate — first-run customers see the onboarding flow before
   // the main shell mounts. Completion sets `proplan_onboarded` in localStorage.
   const [onboarded, setOnboarded] = useState<boolean>(hasOnboarded);
