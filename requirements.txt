@@ -4,6 +4,8 @@ uvicorn[standard]>=0.29.0
 
 # Data validation
 pydantic>=2.0.0
+# Required by pydantic EmailStr — used by the chat capture_lead / book_call bodies
+email-validator>=2.0.0
 
 # Anthropic integration (optional — required for real LLM planning)
 anthropic>=0.49.0

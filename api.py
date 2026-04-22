@@ -42,6 +42,7 @@ from proplanOrchestrator import (
 )
 from database import get_database, LeadModel, CampaignModel, AgentSessionModel, BusinessProfileModel, extract_leads_from_memory
 from llm import AnthropicPlannerProvider, AnthropicAgentProvider
+from chat_routes import router as chat_router
 
 try:
     from tasks import celery_app, run_orchestrator
@@ -319,6 +320,11 @@ app.add_middleware(
     # frontend falls back to its generic stem instead of the timestamped name.
     expose_headers=["Content-Disposition"],
 )
+
+# Mount the public chat router. Its endpoints live under /agent/chat/* and
+# are intentionally unauthenticated (abuse is controlled by per-IP and
+# per-conversation rate limits inside chat_routes.py).
+app.include_router(chat_router)
 
 
 @app.get("/health", tags=["System"])

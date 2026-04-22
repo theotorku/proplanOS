@@ -41,6 +41,7 @@ class LeadModel(BaseModel):
     qualification_rationale: Optional[str] = None
     qualification_factors: Optional[Dict[str, Any]] = None
     source: str = "agent"
+    source_conversation_id: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -73,6 +74,41 @@ class BusinessProfileModel(BaseModel):
     slack_webhook_url: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+class ChatConversationModel(BaseModel):
+    """One visitor session on the embeddable site chat or /chat page."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: Optional[str] = None
+    status: str = "active"           # active | ended | escalated
+    origin: Optional[str] = None     # browser Origin header
+    ip: Optional[str] = None
+    user_agent: Optional[str] = None
+    referrer: Optional[str] = None
+    utm: Optional[Dict[str, Any]] = None
+    message_count: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    escalated_to_slack: bool = False
+    lead_captured: bool = False
+    started_at: Optional[str] = None
+    last_message_at: Optional[str] = None
+    ended_at: Optional[str] = None
+
+
+class ChatMessageModel(BaseModel):
+    """One turn inside a chat conversation."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    conversation_id: str
+    role: str                        # user | assistant | system | tool
+    content: str
+    tool_name: Optional[str] = None
+    tool_payload: Optional[Dict[str, Any]] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
+    created_at: Optional[str] = None
 
 
 class AgentSessionModel(BaseModel):
@@ -124,6 +160,14 @@ class DatabaseProvider(Protocol):
     def get_profile(self, user_id: str) -> Optional["BusinessProfileModel"]: ...
     def upsert_profile(self, profile: "BusinessProfileModel") -> "BusinessProfileModel": ...
 
+    # Chat
+    def create_chat_conversation(self, convo: ChatConversationModel) -> ChatConversationModel: ...
+    def get_chat_conversation(self, convo_id: str) -> Optional[ChatConversationModel]: ...
+    def update_chat_conversation(self, convo_id: str, **fields: Any) -> None: ...
+    def create_chat_message(self, msg: ChatMessageModel) -> ChatMessageModel: ...
+    def get_chat_messages(self, convo_id: str) -> List[ChatMessageModel]: ...
+    def count_recent_conversations_by_ip(self, ip: str, since_iso: str) -> int: ...
+
 
 # ============================================================
 # IN-MEMORY DATABASE (Development / Testing)
@@ -138,6 +182,8 @@ class InMemoryDatabase:
         self.campaigns: Dict[str, CampaignModel] = {}
         self.sessions: List[AgentSessionModel] = []
         self.profiles: Dict[str, "BusinessProfileModel"] = {}
+        self.chat_conversations: Dict[str, ChatConversationModel] = {}
+        self.chat_messages: List[ChatMessageModel] = []
         logging.info("Initialized InMemoryDatabase")
 
     def get_leads(self, min_score: Optional[float] = None,
@@ -214,6 +260,39 @@ class InMemoryDatabase:
         with self._lock:
             runs = [s for s in self.sessions if s.user_id == user_id and s.agent_type == "orchestrator"]
         return list(reversed(runs))[:limit]
+
+    # ---- Chat ----
+    def create_chat_conversation(self, convo: ChatConversationModel) -> ChatConversationModel:
+        with self._lock:
+            self.chat_conversations[convo.id] = convo
+        return convo
+
+    def get_chat_conversation(self, convo_id: str) -> Optional[ChatConversationModel]:
+        return self.chat_conversations.get(convo_id)
+
+    def update_chat_conversation(self, convo_id: str, **fields: Any) -> None:
+        with self._lock:
+            convo = self.chat_conversations.get(convo_id)
+            if not convo:
+                return
+            for k, v in fields.items():
+                setattr(convo, k, v)
+
+    def create_chat_message(self, msg: ChatMessageModel) -> ChatMessageModel:
+        with self._lock:
+            self.chat_messages.append(msg)
+        return msg
+
+    def get_chat_messages(self, convo_id: str) -> List[ChatMessageModel]:
+        with self._lock:
+            return [m for m in self.chat_messages if m.conversation_id == convo_id]
+
+    def count_recent_conversations_by_ip(self, ip: str, since_iso: str) -> int:
+        with self._lock:
+            return sum(
+                1 for c in self.chat_conversations.values()
+                if c.ip == ip and (c.started_at or "") >= since_iso
+            )
 
 
 # ============================================================
@@ -363,6 +442,74 @@ class SupabaseDatabase:
         except Exception as e:
             logging.warning("SupabaseDatabase.get_runs failed: %s", e)
             return []
+
+    # ---- Chat ----
+    def create_chat_conversation(self, convo: ChatConversationModel) -> ChatConversationModel:
+        try:
+            data = convo.model_dump(exclude_none=True)
+            self.client.table("chat_conversations").insert(data).execute()
+            return convo
+        except Exception as e:
+            logging.error("SupabaseDatabase.create_chat_conversation failed: %s", e, exc_info=True)
+            raise
+
+    def get_chat_conversation(self, convo_id: str) -> Optional[ChatConversationModel]:
+        try:
+            result = (
+                self.client.table("chat_conversations")
+                .select("*")
+                .eq("id", convo_id)
+                .limit(1)
+                .execute()
+            )
+            return ChatConversationModel(**result.data[0]) if result.data else None
+        except Exception as e:
+            logging.warning("SupabaseDatabase.get_chat_conversation failed: %s", e)
+            return None
+
+    def update_chat_conversation(self, convo_id: str, **fields: Any) -> None:
+        try:
+            self.client.table("chat_conversations").update(fields).eq("id", convo_id).execute()
+        except Exception as e:
+            logging.error("SupabaseDatabase.update_chat_conversation failed: %s", e, exc_info=True)
+            raise
+
+    def create_chat_message(self, msg: ChatMessageModel) -> ChatMessageModel:
+        try:
+            data = msg.model_dump(exclude_none=True)
+            self.client.table("chat_messages").insert(data).execute()
+            return msg
+        except Exception as e:
+            logging.error("SupabaseDatabase.create_chat_message failed: %s", e, exc_info=True)
+            raise
+
+    def get_chat_messages(self, convo_id: str) -> List[ChatMessageModel]:
+        try:
+            result = (
+                self.client.table("chat_messages")
+                .select("*")
+                .eq("conversation_id", convo_id)
+                .order("created_at", desc=False)
+                .execute()
+            )
+            return [ChatMessageModel(**row) for row in result.data]
+        except Exception as e:
+            logging.warning("SupabaseDatabase.get_chat_messages failed: %s", e)
+            return []
+
+    def count_recent_conversations_by_ip(self, ip: str, since_iso: str) -> int:
+        try:
+            result = (
+                self.client.table("chat_conversations")
+                .select("id", count="exact")
+                .eq("ip", ip)
+                .gte("started_at", since_iso)
+                .execute()
+            )
+            return int(result.count or 0)
+        except Exception as e:
+            logging.warning("SupabaseDatabase.count_recent_conversations_by_ip failed: %s", e)
+            return 0
 
 
 # ============================================================
