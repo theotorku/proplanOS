@@ -20,7 +20,10 @@ type Trigger = {
   id: string;
   user_id: string;
   name: string;
-  schedule_cron: string;
+  event_type: string;
+  schedule_cron: string | null;
+  webhook_token: string | null;
+  event_filter: Record<string, unknown> | null;
   prompt_template: string;
   enabled: boolean;
   last_run_at: string | null;
@@ -312,7 +315,13 @@ function AppShell({ userId }: { userId: string }) {
   const [triggers, setTriggers]             = useState<Trigger[]>([]);
   const [triggersLoading, setTriggersLoading] = useState(false);
   const [triggersError, setTriggersError]   = useState<string | null>(null);
-  const [triggerDraft, setTriggerDraft]     = useState({ name: '', schedule_cron: '0 9 * * *', prompt_template: '' });
+  const [triggerDraft, setTriggerDraft]     = useState({
+    name: '',
+    event_type: 'cron',
+    schedule_cron: '0 9 * * *',
+    prompt_template: '',
+    event_filter: '',
+  });
   const [triggerSaving, setTriggerSaving]   = useState(false);
 
   // System health
@@ -431,23 +440,52 @@ function AppShell({ userId }: { userId: string }) {
   }, [userId]);
 
   const createTrigger = useCallback(async () => {
-    if (!triggerDraft.name.trim() || !triggerDraft.schedule_cron.trim() || !triggerDraft.prompt_template.trim()) {
-      setTriggersError('Name, schedule, and prompt are all required.');
+    if (!triggerDraft.name.trim() || !triggerDraft.prompt_template.trim()) {
+      setTriggersError('Name and prompt are required.');
       return;
+    }
+    if (triggerDraft.event_type === 'cron' && !triggerDraft.schedule_cron.trim()) {
+      setTriggersError('Cron triggers need a schedule.');
+      return;
+    }
+    let parsedFilter: Record<string, unknown> | undefined;
+    if (triggerDraft.event_filter.trim()) {
+      try {
+        parsedFilter = JSON.parse(triggerDraft.event_filter);
+      } catch {
+        setTriggersError('Event filter must be valid JSON (e.g. {"min_icp_score": 70}).');
+        return;
+      }
     }
     setTriggerSaving(true);
     setTriggersError(null);
     try {
+      const body: Record<string, unknown> = {
+        user_id: userId,
+        name: triggerDraft.name,
+        event_type: triggerDraft.event_type,
+        prompt_template: triggerDraft.prompt_template,
+        enabled: true,
+      };
+      if (triggerDraft.event_type === 'cron') body.schedule_cron = triggerDraft.schedule_cron;
+      if (parsedFilter) body.event_filter = parsedFilter;
+
       const res = await fetch(`${API_BASE_URL}/triggers`, {
         method: 'POST',
         headers: apiHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ user_id: userId, ...triggerDraft, enabled: true }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `HTTP ${res.status}`);
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.detail || `HTTP ${res.status}`);
       }
-      setTriggerDraft({ name: '', schedule_cron: '0 9 * * *', prompt_template: '' });
+      setTriggerDraft({
+        name: '',
+        event_type: 'cron',
+        schedule_cron: '0 9 * * *',
+        prompt_template: '',
+        event_filter: '',
+      });
       await fetchTriggers();
     } catch (err: unknown) {
       setTriggersError(err instanceof Error ? err.message : 'Failed to create trigger.');
@@ -1634,24 +1672,51 @@ function AppShell({ userId }: { userId: string }) {
                 <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 10, letterSpacing: '0.08em' }}>
                   NEW TRIGGER
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 220px', gap: 10, marginBottom: 10 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 180px', gap: 10, marginBottom: 10 }}>
                   <input
                     className="text-input"
                     placeholder="Name (e.g. Daily HVAC prospects)"
                     value={triggerDraft.name}
                     onChange={e => setTriggerDraft(d => ({ ...d, name: e.target.value }))}
                   />
+                  <select
+                    className="text-input"
+                    value={triggerDraft.event_type}
+                    onChange={e => setTriggerDraft(d => ({ ...d, event_type: e.target.value }))}
+                  >
+                    <option value="cron">CRON (schedule)</option>
+                    <option value="webhook">WEBHOOK (external POST)</option>
+                    <option value="lead.created">EVENT: lead.created</option>
+                    <option value="run.completed">EVENT: run.completed</option>
+                  </select>
+                </div>
+                {triggerDraft.event_type === 'cron' && (
                   <input
                     className="text-input"
-                    placeholder="Cron (m h dom mon dow)"
+                    placeholder="Cron (m h dom mon dow), e.g. '0 9 * * *' = 9am daily"
                     value={triggerDraft.schedule_cron}
                     onChange={e => setTriggerDraft(d => ({ ...d, schedule_cron: e.target.value }))}
-                    title="Standard 5-field cron, e.g. '0 9 * * *' = 9am daily"
+                    style={{ width: '100%', marginBottom: 10 }}
                   />
-                </div>
+                )}
+                {(triggerDraft.event_type === 'lead.created' || triggerDraft.event_type === 'run.completed') && (
+                  <input
+                    className="text-input"
+                    placeholder='Optional filter JSON, e.g. {"min_icp_score": 70}'
+                    value={triggerDraft.event_filter}
+                    onChange={e => setTriggerDraft(d => ({ ...d, event_filter: e.target.value }))}
+                    style={{ width: '100%', marginBottom: 10 }}
+                  />
+                )}
                 <textarea
                   className="text-input"
-                  placeholder="Mission prompt (what should run on schedule)"
+                  placeholder={
+                    triggerDraft.event_type === 'cron'
+                      ? 'Mission prompt (what should run on schedule)'
+                      : triggerDraft.event_type === 'webhook'
+                      ? 'Mission prompt — webhook body is appended as JSON context'
+                      : 'Mission prompt — event payload is appended as JSON context'
+                  }
                   rows={3}
                   value={triggerDraft.prompt_template}
                   onChange={e => setTriggerDraft(d => ({ ...d, prompt_template: e.target.value }))}
@@ -1688,14 +1753,18 @@ function AppShell({ userId }: { userId: string }) {
                       <tr>
                         <th>STATE</th>
                         <th>NAME</th>
-                        <th>CRON</th>
-                        <th>NEXT RUN</th>
-                        <th>LAST RUN</th>
+                        <th>TYPE</th>
+                        <th>SCHEDULE / TOKEN</th>
+                        <th>NEXT / LAST</th>
                         <th style={{ textAlign: 'right' }}>ACTIONS</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {triggers.map(t => (
+                      {triggers.map(t => {
+                        const webhookUrl = t.webhook_token
+                          ? `${API_BASE_URL}/triggers/webhook/${t.webhook_token}`
+                          : null;
+                        return (
                         <tr key={t.id}>
                           <td>
                             <span
@@ -1712,9 +1781,26 @@ function AppShell({ userId }: { userId: string }) {
                             </span>
                           </td>
                           <td className="td-name" title={t.prompt_template}>{t.name}</td>
-                          <td className="td-id">{t.schedule_cron}</td>
-                          <td className="td-muted">{t.next_run_at ?? '—'}</td>
-                          <td className="td-muted">{t.last_run_at ?? '—'}</td>
+                          <td className="td-id">{t.event_type}</td>
+                          <td className="td-id" style={{ maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {t.event_type === 'cron' && (t.schedule_cron ?? '—')}
+                            {t.event_type === 'webhook' && webhookUrl && (
+                              <span
+                                style={{ cursor: 'pointer', color: 'var(--accent)' }}
+                                title="Click to copy webhook URL"
+                                onClick={() => { navigator.clipboard?.writeText(webhookUrl); }}
+                              >
+                                {webhookUrl.length > 40 ? `…${webhookUrl.slice(-38)}` : webhookUrl}
+                              </span>
+                            )}
+                            {(t.event_type === 'lead.created' || t.event_type === 'run.completed') && (
+                              t.event_filter ? JSON.stringify(t.event_filter) : 'no filter'
+                            )}
+                          </td>
+                          <td className="td-muted" style={{ fontSize: 10 }}>
+                            <div>next: {t.next_run_at ?? '—'}</div>
+                            <div>last: {t.last_run_at ?? '—'}</div>
+                          </td>
                           <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                             <button
                               type="button"
@@ -1735,7 +1821,7 @@ function AppShell({ userId }: { userId: string }) {
                             </button>
                           </td>
                         </tr>
-                      ))}
+                      );})}
                     </tbody>
                   </table>
                 </div>

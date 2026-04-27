@@ -112,11 +112,15 @@ class ChatMessageModel(BaseModel):
 
 
 class TriggerModel(BaseModel):
-    """Cron-driven recurring mission."""
+    """Cron-, webhook-, or event-driven recurring mission."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
     name: str
-    schedule_cron: str
+    # 'cron' | 'webhook' | 'lead.created' | 'run.completed'
+    event_type: str = "cron"
+    schedule_cron: Optional[str] = None
+    webhook_token: Optional[str] = None
+    event_filter: Optional[Dict[str, Any]] = None
     prompt_template: str
     enabled: bool = True
     last_run_at: Optional[str] = None
@@ -199,6 +203,8 @@ class DatabaseProvider(Protocol):
     def update_trigger(self, trigger_id: str, **fields: Any) -> Optional["TriggerModel"]: ...
     def delete_trigger(self, trigger_id: str) -> bool: ...
     def get_due_triggers(self, now_iso: str) -> List["TriggerModel"]: ...
+    def get_trigger_by_webhook_token(self, token: str) -> Optional["TriggerModel"]: ...
+    def list_triggers_by_event(self, event_type: str) -> List["TriggerModel"]: ...
     def create_trigger_run(self, run: "TriggerRunModel") -> "TriggerRunModel": ...
     def list_trigger_runs(self, trigger_id: str, limit: int = 20) -> List["TriggerRunModel"]: ...
 
@@ -365,7 +371,22 @@ class InMemoryDatabase:
         with self._lock:
             return [
                 t for t in self.triggers.values()
-                if t.enabled and (t.next_run_at or "") <= now_iso
+                if t.enabled and t.event_type == "cron"
+                and t.next_run_at and t.next_run_at <= now_iso
+            ]
+
+    def get_trigger_by_webhook_token(self, token: str) -> Optional[TriggerModel]:
+        with self._lock:
+            for t in self.triggers.values():
+                if t.webhook_token == token:
+                    return t
+        return None
+
+    def list_triggers_by_event(self, event_type: str) -> List[TriggerModel]:
+        with self._lock:
+            return [
+                t for t in self.triggers.values()
+                if t.enabled and t.event_type == event_type
             ]
 
     def create_trigger_run(self, run: TriggerRunModel) -> TriggerRunModel:
@@ -657,12 +678,41 @@ class SupabaseDatabase:
                 self.client.table("triggers")
                 .select("*")
                 .eq("enabled", True)
+                .eq("event_type", "cron")
                 .lte("next_run_at", now_iso)
                 .execute()
             )
             return [TriggerModel(**row) for row in result.data]
         except Exception as e:
             logging.warning("SupabaseDatabase.get_due_triggers failed: %s", e)
+            return []
+
+    def get_trigger_by_webhook_token(self, token: str) -> Optional[TriggerModel]:
+        try:
+            result = (
+                self.client.table("triggers")
+                .select("*")
+                .eq("webhook_token", token)
+                .limit(1)
+                .execute()
+            )
+            return TriggerModel(**result.data[0]) if result.data else None
+        except Exception as e:
+            logging.warning("SupabaseDatabase.get_trigger_by_webhook_token failed: %s", e)
+            return None
+
+    def list_triggers_by_event(self, event_type: str) -> List[TriggerModel]:
+        try:
+            result = (
+                self.client.table("triggers")
+                .select("*")
+                .eq("enabled", True)
+                .eq("event_type", event_type)
+                .execute()
+            )
+            return [TriggerModel(**row) for row in result.data]
+        except Exception as e:
+            logging.warning("SupabaseDatabase.list_triggers_by_event failed: %s", e)
             return []
 
     def create_trigger_run(self, run: TriggerRunModel) -> TriggerRunModel:

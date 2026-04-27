@@ -13,7 +13,7 @@ Endpoints:
     GET  /health                            — Health check
 """
 
-from fastapi import FastAPI, HTTPException, Query, Depends, Security, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Query, Depends, Security, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.security.api_key import APIKeyHeader
@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import csv
 import io
 import json
+import secrets
 import threading
 import uuid
 import time
@@ -55,6 +56,7 @@ from database import (
 from llm import AnthropicPlannerProvider, AnthropicAgentProvider
 from chat_routes import router as chat_router
 from scheduler import TriggerScheduler, compute_next_run, validate_cron
+from events import emit_event, MAX_EVENT_DEPTH
 
 try:
     from tasks import celery_app, run_orchestrator
@@ -155,8 +157,18 @@ def _db_backend_name() -> str:
     return "supabase" if isinstance(db, SupabaseDatabase) else "memory"
 
 
-def _run_orchestrator_bg(run_id: str, request: str, business_context: Optional[str], user_id: str) -> None:
-    """Background task: run orchestrator and update the run's agent_sessions row."""
+def _run_orchestrator_bg(
+    run_id: str,
+    request: str,
+    business_context: Optional[str],
+    user_id: str,
+    event_depth: int = 0,
+) -> None:
+    """Background task: run orchestrator and update the run's agent_sessions row.
+
+    event_depth tracks how many event triggers deep this run is. Events emitted
+    from this run propagate (depth + 1) so cascades terminate at MAX_EVENT_DEPTH.
+    """
     persistence_errors: List[Dict[str, Any]] = []
     leads_extracted = 0
     leads_saved = 0
@@ -193,6 +205,16 @@ def _run_orchestrator_bg(run_id: str, request: str, business_context: Optional[s
             try:
                 db.create_lead(lead)
                 leads_saved += 1
+                try:
+                    emit_event(
+                        db, _fire_trigger,
+                        "lead.created",
+                        lead.model_dump(),
+                        user_id=user_id,
+                        depth=event_depth,
+                    )
+                except Exception as ev_err:
+                    logging.warning("emit lead.created failed: %s", ev_err)
             except Exception as e:
                 logging.error(
                     "Lead persistence failed (run=%s lead_idx=%d backend=%s): %s",
@@ -254,6 +276,23 @@ def _run_orchestrator_bg(run_id: str, request: str, business_context: Optional[s
                 "update_run_session failed (run=%s backend=%s): %s",
                 run_id, _db_backend_name(), e, exc_info=True,
             )
+
+        try:
+            emit_event(
+                db, _fire_trigger,
+                "run.completed",
+                {
+                    "run_id": run_id,
+                    "status": result["status"],
+                    "total_cost": result["total_cost"],
+                    "leads_saved": leads_saved,
+                    "campaigns_saved": campaigns_saved,
+                },
+                user_id=user_id,
+                depth=event_depth,
+            )
+        except Exception as ev_err:
+            logging.warning("emit run.completed failed: %s", ev_err)
 
     except Exception as e:
         logging.error("Background run %s failed: %s", run_id, e, exc_info=True)
@@ -506,11 +545,31 @@ def _profile_to_context(profile: Optional[BusinessProfileModel]) -> Optional[str
     return "\n".join(lines)
 
 
-def _fire_trigger(trigger: TriggerModel) -> None:
-    """Dispatch one trigger fire: create a run row, kick the bg orchestrator, audit it."""
+def _build_trigger_prompt(trigger: TriggerModel, context: Optional[Dict[str, Any]]) -> str:
+    """Compose the prompt for a triggered run, optionally folding event payload in."""
+    if not context:
+        return trigger.prompt_template
+    payload = context.get("payload") or {}
+    if not payload:
+        return trigger.prompt_template
+    return (
+        f"{trigger.prompt_template}\n\n"
+        f"[EVENT: {context.get('event_type', 'unknown')}]\n"
+        f"{json.dumps(payload, default=str, indent=2)}"
+    )
+
+
+def _fire_trigger(trigger: TriggerModel, context: Optional[Dict[str, Any]] = None) -> None:
+    """Dispatch one trigger fire: create a run row, kick the bg orchestrator, audit it.
+
+    `context` carries event metadata for non-cron triggers:
+        {"event_type": "lead.created", "payload": {...}, "depth": 1}
+    """
     run_id = str(uuid.uuid4())
     profile = db.get_profile(trigger.user_id)
     business_context = _profile_to_context(profile)
+    prompt = _build_trigger_prompt(trigger, context)
+    depth = (context or {}).get("depth", 0)
 
     audit_status = "dispatched"
     audit_error: Optional[str] = None
@@ -522,15 +581,17 @@ def _fire_trigger(trigger: TriggerModel) -> None:
             status="running",
             input_data={
                 "user_id": trigger.user_id,
-                "request": trigger.prompt_template,
+                "request": prompt,
                 "trigger_id": trigger.id,
                 "trigger_name": trigger.name,
+                "event_type": (context or {}).get("event_type"),
+                "event_depth": depth,
             },
             started_at=datetime.now(timezone.utc).isoformat(),
         ))
         threading.Thread(
             target=_run_orchestrator_bg,
-            args=(run_id, trigger.prompt_template, business_context, trigger.user_id),
+            args=(run_id, prompt, business_context, trigger.user_id, depth),
             name=f"trigger-{trigger.id[:8]}",
             daemon=True,
         ).start()
@@ -540,9 +601,15 @@ def _fire_trigger(trigger: TriggerModel) -> None:
         logging.error("Trigger dispatch failed (id=%s): %s", trigger.id, e, exc_info=True)
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    next_iso = compute_next_run(trigger.schedule_cron)
+    update_fields: Dict[str, Any] = {"last_run_at": now_iso}
+    # Cron triggers advance their schedule; event/webhook triggers don't have one.
+    if trigger.event_type == "cron" and trigger.schedule_cron:
+        try:
+            update_fields["next_run_at"] = compute_next_run(trigger.schedule_cron)
+        except Exception as e:
+            logging.warning("compute_next_run failed for trigger %s: %s", trigger.id, e)
     try:
-        db.update_trigger(trigger.id, last_run_at=now_iso, next_run_at=next_iso)
+        db.update_trigger(trigger.id, **update_fields)
     except Exception as e:
         logging.error("Trigger update_trigger failed (id=%s): %s", trigger.id, e)
 
@@ -574,11 +641,16 @@ def _stop_scheduler() -> None:
     _scheduler.stop()
 
 
+_VALID_EVENT_TYPES = {"cron", "webhook", "lead.created", "run.completed"}
+
+
 class TriggerCreate(BaseModel):
     user_id: str
     name: str
-    schedule_cron: str
+    event_type: str = "cron"
+    schedule_cron: Optional[str] = None
     prompt_template: str
+    event_filter: Optional[Dict[str, Any]] = None
     enabled: bool = True
 
 
@@ -586,6 +658,7 @@ class TriggerUpdate(BaseModel):
     name: Optional[str] = None
     schedule_cron: Optional[str] = None
     prompt_template: Optional[str] = None
+    event_filter: Optional[Dict[str, Any]] = None
     enabled: Optional[bool] = None
 
 
@@ -598,19 +671,57 @@ def list_triggers(user_id: str = Query(..., description="User ID to filter trigg
 @app.post("/triggers", response_model=TriggerModel, status_code=201, tags=["Triggers"],
           dependencies=[Depends(verify_api_key)])
 def create_trigger(body: TriggerCreate):
-    try:
-        validate_cron(body.schedule_cron)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    if body.event_type not in _VALID_EVENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event_type. Must be one of: {sorted(_VALID_EVENT_TYPES)}",
+        )
+
+    next_run_at: Optional[str] = None
+    webhook_token: Optional[str] = None
+
+    if body.event_type == "cron":
+        if not body.schedule_cron:
+            raise HTTPException(status_code=400, detail="schedule_cron required for cron triggers.")
+        try:
+            validate_cron(body.schedule_cron)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        next_run_at = compute_next_run(body.schedule_cron)
+    elif body.event_type == "webhook":
+        webhook_token = secrets.token_urlsafe(24)
+
     trigger = TriggerModel(
         user_id=body.user_id,
         name=body.name,
-        schedule_cron=body.schedule_cron,
+        event_type=body.event_type,
+        schedule_cron=body.schedule_cron if body.event_type == "cron" else None,
+        webhook_token=webhook_token,
+        event_filter=body.event_filter,
         prompt_template=body.prompt_template,
         enabled=body.enabled,
-        next_run_at=compute_next_run(body.schedule_cron),
+        next_run_at=next_run_at,
     )
     return db.create_trigger(trigger)
+
+
+@app.post("/triggers/webhook/{token}", tags=["Triggers"])
+async def trigger_webhook(token: str, request: Request):
+    """Public webhook endpoint. Token IS the auth — keep it secret."""
+    trigger = db.get_trigger_by_webhook_token(token)
+    if not trigger or not trigger.enabled:
+        raise HTTPException(status_code=404, detail="Webhook not found.")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    payload = body if isinstance(body, dict) else {"value": body}
+    _fire_trigger(trigger, {
+        "event_type": "webhook",
+        "payload": payload,
+        "depth": 0,
+    })
+    return {"status": "accepted", "trigger_id": trigger.id}
 
 
 @app.patch("/triggers/{trigger_id}", response_model=TriggerModel, tags=["Triggers"],
