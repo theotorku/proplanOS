@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import csv
 import io
 import json
+import threading
 import uuid
 import time
 import os
@@ -46,11 +47,14 @@ from database import (
     CampaignModel,
     AgentSessionModel,
     BusinessProfileModel,
+    TriggerModel,
+    TriggerRunModel,
     extract_leads_from_memory,
     extract_campaigns_from_memory,
 )
 from llm import AnthropicPlannerProvider, AnthropicAgentProvider
 from chat_routes import router as chat_router
+from scheduler import TriggerScheduler, compute_next_run, validate_cron
 
 try:
     from tasks import celery_app, run_orchestrator
@@ -478,6 +482,176 @@ def agent_run_celery_status(task_id: str):
         return {"status": task.state.lower(), "result": task.result}
     else:
         return {"status": "failed", "result": {"error": str(task.info)}}
+
+
+# -----------------------------
+# Triggers (cron-driven recurring missions)
+# -----------------------------
+
+
+def _profile_to_context(profile: Optional[BusinessProfileModel]) -> Optional[str]:
+    """Server-side mirror of the frontend profileToContext helper."""
+    if not profile or not (profile.company_name or profile.what_we_do or profile.icp):
+        return None
+    lines: List[str] = []
+    if profile.company_name:      lines.append(f"Company: {profile.company_name}")
+    if profile.what_we_do:        lines.append(f"What we do: {profile.what_we_do}")
+    if profile.icp:               lines.append(f"Ideal Customer Profile: {profile.icp}")
+    if profile.target_industries: lines.append(f"Target industries: {profile.target_industries}")
+    if profile.company_size:      lines.append(f"Target company size: {profile.company_size}")
+    if profile.geography:         lines.append(f"Geography: {profile.geography}")
+    if profile.lead_signals:      lines.append(f"Lead qualification signals: {profile.lead_signals}")
+    if profile.value_proposition: lines.append(f"Value proposition: {profile.value_proposition}")
+    if profile.tone:              lines.append(f"Communication tone: {profile.tone}")
+    return "\n".join(lines)
+
+
+def _fire_trigger(trigger: TriggerModel) -> None:
+    """Dispatch one trigger fire: create a run row, kick the bg orchestrator, audit it."""
+    run_id = str(uuid.uuid4())
+    profile = db.get_profile(trigger.user_id)
+    business_context = _profile_to_context(profile)
+
+    audit_status = "dispatched"
+    audit_error: Optional[str] = None
+    try:
+        db.create_run_session(AgentSessionModel(
+            run_id=run_id,
+            user_id=trigger.user_id,
+            agent_type="orchestrator",
+            status="running",
+            input_data={
+                "user_id": trigger.user_id,
+                "request": trigger.prompt_template,
+                "trigger_id": trigger.id,
+                "trigger_name": trigger.name,
+            },
+            started_at=datetime.now(timezone.utc).isoformat(),
+        ))
+        threading.Thread(
+            target=_run_orchestrator_bg,
+            args=(run_id, trigger.prompt_template, business_context, trigger.user_id),
+            name=f"trigger-{trigger.id[:8]}",
+            daemon=True,
+        ).start()
+    except Exception as e:
+        audit_status = "failed"
+        audit_error = f"{type(e).__name__}: {e}"
+        logging.error("Trigger dispatch failed (id=%s): %s", trigger.id, e, exc_info=True)
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    next_iso = compute_next_run(trigger.schedule_cron)
+    try:
+        db.update_trigger(trigger.id, last_run_at=now_iso, next_run_at=next_iso)
+    except Exception as e:
+        logging.error("Trigger update_trigger failed (id=%s): %s", trigger.id, e)
+
+    try:
+        db.create_trigger_run(TriggerRunModel(
+            trigger_id=trigger.id,
+            run_id=run_id if audit_status == "dispatched" else None,
+            status=audit_status,
+            error=audit_error,
+            fired_at=now_iso,
+        ))
+    except Exception as e:
+        logging.error("Trigger audit row failed (id=%s): %s", trigger.id, e)
+
+
+_scheduler = TriggerScheduler(db, _fire_trigger)
+
+
+@app.on_event("startup")
+def _start_scheduler() -> None:
+    if os.environ.get("DISABLE_SCHEDULER") == "1":
+        logging.info("TriggerScheduler disabled via DISABLE_SCHEDULER env var")
+        return
+    _scheduler.start()
+
+
+@app.on_event("shutdown")
+def _stop_scheduler() -> None:
+    _scheduler.stop()
+
+
+class TriggerCreate(BaseModel):
+    user_id: str
+    name: str
+    schedule_cron: str
+    prompt_template: str
+    enabled: bool = True
+
+
+class TriggerUpdate(BaseModel):
+    name: Optional[str] = None
+    schedule_cron: Optional[str] = None
+    prompt_template: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+@app.get("/triggers", response_model=List[TriggerModel], tags=["Triggers"],
+         dependencies=[Depends(verify_api_key)])
+def list_triggers(user_id: str = Query(..., description="User ID to filter triggers")):
+    return db.list_triggers(user_id)
+
+
+@app.post("/triggers", response_model=TriggerModel, status_code=201, tags=["Triggers"],
+          dependencies=[Depends(verify_api_key)])
+def create_trigger(body: TriggerCreate):
+    try:
+        validate_cron(body.schedule_cron)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    trigger = TriggerModel(
+        user_id=body.user_id,
+        name=body.name,
+        schedule_cron=body.schedule_cron,
+        prompt_template=body.prompt_template,
+        enabled=body.enabled,
+        next_run_at=compute_next_run(body.schedule_cron),
+    )
+    return db.create_trigger(trigger)
+
+
+@app.patch("/triggers/{trigger_id}", response_model=TriggerModel, tags=["Triggers"],
+           dependencies=[Depends(verify_api_key)])
+def update_trigger(trigger_id: str, body: TriggerUpdate):
+    fields = body.model_dump(exclude_none=True)
+    if "schedule_cron" in fields:
+        try:
+            validate_cron(fields["schedule_cron"])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        fields["next_run_at"] = compute_next_run(fields["schedule_cron"])
+    updated = db.update_trigger(trigger_id, **fields)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Trigger not found.")
+    return updated
+
+
+@app.delete("/triggers/{trigger_id}", status_code=204, tags=["Triggers"],
+            dependencies=[Depends(verify_api_key)])
+def delete_trigger(trigger_id: str):
+    if not db.delete_trigger(trigger_id):
+        raise HTTPException(status_code=404, detail="Trigger not found.")
+    return Response(status_code=204)
+
+
+@app.post("/triggers/{trigger_id}/fire", response_model=TriggerModel, tags=["Triggers"],
+          dependencies=[Depends(verify_api_key)])
+def fire_trigger_now(trigger_id: str):
+    """Manually fire a trigger immediately (useful for testing)."""
+    trigger = db.get_trigger(trigger_id)
+    if not trigger:
+        raise HTTPException(status_code=404, detail="Trigger not found.")
+    _fire_trigger(trigger)
+    return db.get_trigger(trigger_id)
+
+
+@app.get("/triggers/{trigger_id}/runs", response_model=List[TriggerRunModel], tags=["Triggers"],
+         dependencies=[Depends(verify_api_key)])
+def list_trigger_run_history(trigger_id: str, limit: int = Query(20, ge=1, le=100)):
+    return db.list_trigger_runs(trigger_id, limit=limit)
 
 
 @app.get("/profile/{user_id}", response_model=BusinessProfileModel, tags=["Profile"],

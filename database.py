@@ -111,6 +111,30 @@ class ChatMessageModel(BaseModel):
     created_at: Optional[str] = None
 
 
+class TriggerModel(BaseModel):
+    """Cron-driven recurring mission."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    name: str
+    schedule_cron: str
+    prompt_template: str
+    enabled: bool = True
+    last_run_at: Optional[str] = None
+    next_run_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class TriggerRunModel(BaseModel):
+    """Audit row for one fire of a trigger."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    trigger_id: str
+    run_id: Optional[str] = None
+    status: str = "dispatched"   # dispatched | failed
+    error: Optional[str] = None
+    fired_at: Optional[str] = None
+
+
 class AgentSessionModel(BaseModel):
     """Agent session record matching the Supabase agent_sessions table."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -168,6 +192,16 @@ class DatabaseProvider(Protocol):
     def get_chat_messages(self, convo_id: str) -> List[ChatMessageModel]: ...
     def count_recent_conversations_by_ip(self, ip: str, since_iso: str) -> int: ...
 
+    # Triggers
+    def list_triggers(self, user_id: str) -> List["TriggerModel"]: ...
+    def get_trigger(self, trigger_id: str) -> Optional["TriggerModel"]: ...
+    def create_trigger(self, trigger: "TriggerModel") -> "TriggerModel": ...
+    def update_trigger(self, trigger_id: str, **fields: Any) -> Optional["TriggerModel"]: ...
+    def delete_trigger(self, trigger_id: str) -> bool: ...
+    def get_due_triggers(self, now_iso: str) -> List["TriggerModel"]: ...
+    def create_trigger_run(self, run: "TriggerRunModel") -> "TriggerRunModel": ...
+    def list_trigger_runs(self, trigger_id: str, limit: int = 20) -> List["TriggerRunModel"]: ...
+
 
 # ============================================================
 # IN-MEMORY DATABASE (Development / Testing)
@@ -184,6 +218,8 @@ class InMemoryDatabase:
         self.profiles: Dict[str, "BusinessProfileModel"] = {}
         self.chat_conversations: Dict[str, ChatConversationModel] = {}
         self.chat_messages: List[ChatMessageModel] = []
+        self.triggers: Dict[str, TriggerModel] = {}
+        self.trigger_runs: List[TriggerRunModel] = []
         logging.info("Initialized InMemoryDatabase")
 
     def get_leads(self, min_score: Optional[float] = None,
@@ -293,6 +329,55 @@ class InMemoryDatabase:
                 1 for c in self.chat_conversations.values()
                 if c.ip == ip and (c.started_at or "") >= since_iso
             )
+
+    # ---- Triggers ----
+    def list_triggers(self, user_id: str) -> List[TriggerModel]:
+        with self._lock:
+            return [t for t in self.triggers.values() if t.user_id == user_id]
+
+    def get_trigger(self, trigger_id: str) -> Optional[TriggerModel]:
+        with self._lock:
+            return self.triggers.get(trigger_id)
+
+    def create_trigger(self, trigger: TriggerModel) -> TriggerModel:
+        now = datetime.now(timezone.utc).isoformat()
+        trigger.created_at = trigger.created_at or now
+        trigger.updated_at = now
+        with self._lock:
+            self.triggers[trigger.id] = trigger
+        return trigger
+
+    def update_trigger(self, trigger_id: str, **fields: Any) -> Optional[TriggerModel]:
+        with self._lock:
+            t = self.triggers.get(trigger_id)
+            if not t:
+                return None
+            for k, v in fields.items():
+                setattr(t, k, v)
+            t.updated_at = datetime.now(timezone.utc).isoformat()
+            return t
+
+    def delete_trigger(self, trigger_id: str) -> bool:
+        with self._lock:
+            return self.triggers.pop(trigger_id, None) is not None
+
+    def get_due_triggers(self, now_iso: str) -> List[TriggerModel]:
+        with self._lock:
+            return [
+                t for t in self.triggers.values()
+                if t.enabled and (t.next_run_at or "") <= now_iso
+            ]
+
+    def create_trigger_run(self, run: TriggerRunModel) -> TriggerRunModel:
+        run.fired_at = run.fired_at or datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            self.trigger_runs.append(run)
+        return run
+
+    def list_trigger_runs(self, trigger_id: str, limit: int = 20) -> List[TriggerRunModel]:
+        with self._lock:
+            runs = [r for r in self.trigger_runs if r.trigger_id == trigger_id]
+        return list(reversed(runs))[:limit]
 
 
 # ============================================================
@@ -516,6 +601,93 @@ class SupabaseDatabase:
         except Exception as e:
             logging.warning("SupabaseDatabase.count_recent_conversations_by_ip failed: %s", e)
             return 0
+
+    # ---- Triggers ----
+    def list_triggers(self, user_id: str) -> List[TriggerModel]:
+        try:
+            result = (
+                self.client.table("triggers")
+                .select("*")
+                .eq("user_id", user_id)
+                .order("created_at", desc=True)
+                .execute()
+            )
+            return [TriggerModel(**row) for row in result.data]
+        except Exception as e:
+            logging.error("SupabaseDatabase.list_triggers failed: %s", e, exc_info=True)
+            raise
+
+    def get_trigger(self, trigger_id: str) -> Optional[TriggerModel]:
+        try:
+            result = self.client.table("triggers").select("*").eq("id", trigger_id).limit(1).execute()
+            return TriggerModel(**result.data[0]) if result.data else None
+        except Exception as e:
+            logging.warning("SupabaseDatabase.get_trigger failed: %s", e)
+            return None
+
+    def create_trigger(self, trigger: TriggerModel) -> TriggerModel:
+        try:
+            data = trigger.model_dump(exclude_none=True)
+            self.client.table("triggers").insert(data).execute()
+            return trigger
+        except Exception as e:
+            logging.error("SupabaseDatabase.create_trigger failed: %s", e, exc_info=True)
+            raise
+
+    def update_trigger(self, trigger_id: str, **fields: Any) -> Optional[TriggerModel]:
+        try:
+            fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self.client.table("triggers").update(fields).eq("id", trigger_id).execute()
+            return self.get_trigger(trigger_id)
+        except Exception as e:
+            logging.error("SupabaseDatabase.update_trigger failed: %s", e, exc_info=True)
+            raise
+
+    def delete_trigger(self, trigger_id: str) -> bool:
+        try:
+            self.client.table("triggers").delete().eq("id", trigger_id).execute()
+            return True
+        except Exception as e:
+            logging.error("SupabaseDatabase.delete_trigger failed: %s", e, exc_info=True)
+            return False
+
+    def get_due_triggers(self, now_iso: str) -> List[TriggerModel]:
+        try:
+            result = (
+                self.client.table("triggers")
+                .select("*")
+                .eq("enabled", True)
+                .lte("next_run_at", now_iso)
+                .execute()
+            )
+            return [TriggerModel(**row) for row in result.data]
+        except Exception as e:
+            logging.warning("SupabaseDatabase.get_due_triggers failed: %s", e)
+            return []
+
+    def create_trigger_run(self, run: TriggerRunModel) -> TriggerRunModel:
+        try:
+            data = run.model_dump(exclude_none=True)
+            self.client.table("trigger_runs").insert(data).execute()
+            return run
+        except Exception as e:
+            logging.error("SupabaseDatabase.create_trigger_run failed: %s", e, exc_info=True)
+            raise
+
+    def list_trigger_runs(self, trigger_id: str, limit: int = 20) -> List[TriggerRunModel]:
+        try:
+            result = (
+                self.client.table("trigger_runs")
+                .select("*")
+                .eq("trigger_id", trigger_id)
+                .order("fired_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return [TriggerRunModel(**row) for row in result.data]
+        except Exception as e:
+            logging.warning("SupabaseDatabase.list_trigger_runs failed: %s", e)
+            return []
 
 
 # ============================================================

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Terminal, Activity, Shield, Zap, CheckCircle, XCircle, RefreshCw, Users, Megaphone, Settings, Save, Download, MessageSquare, AlertTriangle } from 'lucide-react';
+import { Send, Terminal, Activity, Shield, Zap, CheckCircle, XCircle, RefreshCw, Users, Megaphone, Settings, Save, Download, MessageSquare, AlertTriangle, Clock, Play, Trash2 } from 'lucide-react';
 import Onboarding from './onboarding/Onboarding';
 import MissionControl from './dashboard/MissionControl';
 import ChatPage from './pages/Chat';
@@ -14,7 +14,19 @@ function apiHeaders(extra: Record<string, string> = {}): Record<string, string> 
 }
 
 // ─── Types ──────────────────────────────────────────────────────
-type View = 'mission' | 'leads' | 'campaigns' | 'profile' | 'history';
+type View = 'mission' | 'leads' | 'campaigns' | 'triggers' | 'profile' | 'history';
+
+type Trigger = {
+  id: string;
+  user_id: string;
+  name: string;
+  schedule_cron: string;
+  prompt_template: string;
+  enabled: boolean;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  created_at: string | null;
+};
 
 type RunHistory = {
   id: string;
@@ -296,6 +308,13 @@ function AppShell({ userId }: { userId: string }) {
   const [campaignsLoading, setCampaignsLoading] = useState(false);
   const [campaignsError, setCampaignsError] = useState<string | null>(null);
 
+  // Triggers state
+  const [triggers, setTriggers]             = useState<Trigger[]>([]);
+  const [triggersLoading, setTriggersLoading] = useState(false);
+  const [triggersError, setTriggersError]   = useState<string | null>(null);
+  const [triggerDraft, setTriggerDraft]     = useState({ name: '', schedule_cron: '0 9 * * *', prompt_template: '' });
+  const [triggerSaving, setTriggerSaving]   = useState(false);
+
   // System health
   const [systemOnline, setSystemOnline] = useState(true);
   const [dbBackend, setDbBackend] = useState<string | null>(null);
@@ -395,6 +414,88 @@ function AppShell({ userId }: { userId: string }) {
       setRunsLoading(false);
     }
   }, [userId]);
+
+  const fetchTriggers = useCallback(async () => {
+    setTriggersLoading(true);
+    setTriggersError(null);
+    try {
+      const res = await fetch(`${API_BASE_URL}/triggers?user_id=${encodeURIComponent(userId)}`, { headers: apiHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setTriggers(Array.isArray(data) ? data : []);
+    } catch (err: unknown) {
+      setTriggersError(err instanceof Error ? err.message : 'Failed to load triggers.');
+    } finally {
+      setTriggersLoading(false);
+    }
+  }, [userId]);
+
+  const createTrigger = useCallback(async () => {
+    if (!triggerDraft.name.trim() || !triggerDraft.schedule_cron.trim() || !triggerDraft.prompt_template.trim()) {
+      setTriggersError('Name, schedule, and prompt are all required.');
+      return;
+    }
+    setTriggerSaving(true);
+    setTriggersError(null);
+    try {
+      const res = await fetch(`${API_BASE_URL}/triggers`, {
+        method: 'POST',
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ user_id: userId, ...triggerDraft, enabled: true }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
+      setTriggerDraft({ name: '', schedule_cron: '0 9 * * *', prompt_template: '' });
+      await fetchTriggers();
+    } catch (err: unknown) {
+      setTriggersError(err instanceof Error ? err.message : 'Failed to create trigger.');
+    } finally {
+      setTriggerSaving(false);
+    }
+  }, [userId, triggerDraft, fetchTriggers]);
+
+  const toggleTrigger = useCallback(async (t: Trigger) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/triggers/${t.id}`, {
+        method: 'PATCH',
+        headers: apiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ enabled: !t.enabled }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await fetchTriggers();
+    } catch (err: unknown) {
+      setTriggersError(err instanceof Error ? err.message : 'Toggle failed.');
+    }
+  }, [fetchTriggers]);
+
+  const fireTrigger = useCallback(async (t: Trigger) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/triggers/${t.id}/fire`, {
+        method: 'POST',
+        headers: apiHeaders(),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await fetchTriggers();
+    } catch (err: unknown) {
+      setTriggersError(err instanceof Error ? err.message : 'Fire failed.');
+    }
+  }, [fetchTriggers]);
+
+  const deleteTrigger = useCallback(async (t: Trigger) => {
+    if (!confirm(`Delete trigger "${t.name}"?`)) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/triggers/${t.id}`, {
+        method: 'DELETE',
+        headers: apiHeaders(),
+      });
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      await fetchTriggers();
+    } catch (err: unknown) {
+      setTriggersError(err instanceof Error ? err.message : 'Delete failed.');
+    }
+  }, [fetchTriggers]);
 
   const fetchCampaigns = useCallback(async () => {
     setCampaignsLoading(true);
@@ -560,8 +661,9 @@ function AppShell({ userId }: { userId: string }) {
     if (view === 'mission')   { fetchLeads(); fetchRuns(); }
     if (view === 'leads')     fetchLeads();
     if (view === 'campaigns') fetchCampaigns();
+    if (view === 'triggers')  fetchTriggers();
     if (view === 'history')   fetchRuns();
-  }, [view, fetchLeads, fetchCampaigns, fetchRuns]);
+  }, [view, fetchLeads, fetchCampaigns, fetchTriggers, fetchRuns]);
 
   // ── Mission submit (async + polling with cancel) ──────────────
   const submit = async (e: React.BaseSyntheticEvent) => {
@@ -745,7 +847,7 @@ function AppShell({ userId }: { userId: string }) {
           <div className="header-separator" />
           {/* View tabs */}
           <nav className="view-tabs" aria-label="Main navigation">
-            {(['mission', 'leads', 'campaigns', 'history', 'profile'] as View[]).map(v => (
+            {(['mission', 'leads', 'campaigns', 'triggers', 'history', 'profile'] as View[]).map(v => (
               <button
                 key={v}
                 type="button"
@@ -755,6 +857,7 @@ function AppShell({ userId }: { userId: string }) {
                 {v === 'mission'   && <Terminal  size={11} />}
                 {v === 'leads'     && <Users      size={11} />}
                 {v === 'campaigns' && <Megaphone  size={11} />}
+                {v === 'triggers'  && <Clock      size={11} />}
                 {v === 'history'   && <Activity   size={11} />}
                 {v === 'profile'   && <Settings   size={11} />}
                 {v.toUpperCase()}
@@ -1498,6 +1601,139 @@ function AppShell({ userId }: { userId: string }) {
                           </td>
                           <td className="td-muted">{formatDate(c.created_at)}</td>
                           <td className="td-id">{c.id.slice(0, 12)}…</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ════ TRIGGERS VIEW ════ */}
+          {view === 'triggers' && (
+            <div className="data-view">
+              <div className="data-toolbar">
+                <div className="toolbar-left">
+                  <span className="toolbar-title">SCHEDULED TRIGGERS</span>
+                  <span className="toolbar-count">{triggers.length} ACTIVE</span>
+                </div>
+                <div className="toolbar-right">
+                  <button type="button" className="toolbar-btn" onClick={fetchTriggers} disabled={triggersLoading}>
+                    <RefreshCw size={11} className={triggersLoading ? 'spin' : ''} />
+                    REFRESH
+                  </button>
+                </div>
+              </div>
+
+              {/* Create form */}
+              <div style={{
+                border: '1px solid rgba(255,255,255,0.12)', borderRadius: 4,
+                padding: 14, marginBottom: 16, background: 'rgba(255,255,255,0.02)',
+              }}>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 10, letterSpacing: '0.08em' }}>
+                  NEW TRIGGER
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 220px', gap: 10, marginBottom: 10 }}>
+                  <input
+                    className="text-input"
+                    placeholder="Name (e.g. Daily HVAC prospects)"
+                    value={triggerDraft.name}
+                    onChange={e => setTriggerDraft(d => ({ ...d, name: e.target.value }))}
+                  />
+                  <input
+                    className="text-input"
+                    placeholder="Cron (m h dom mon dow)"
+                    value={triggerDraft.schedule_cron}
+                    onChange={e => setTriggerDraft(d => ({ ...d, schedule_cron: e.target.value }))}
+                    title="Standard 5-field cron, e.g. '0 9 * * *' = 9am daily"
+                  />
+                </div>
+                <textarea
+                  className="text-input"
+                  placeholder="Mission prompt (what should run on schedule)"
+                  rows={3}
+                  value={triggerDraft.prompt_template}
+                  onChange={e => setTriggerDraft(d => ({ ...d, prompt_template: e.target.value }))}
+                  style={{ width: '100%', resize: 'vertical', marginBottom: 10 }}
+                />
+                <button
+                  type="button"
+                  className="toolbar-btn"
+                  onClick={createTrigger}
+                  disabled={triggerSaving}
+                >
+                  <Save size={11} /> {triggerSaving ? 'SAVING…' : 'CREATE TRIGGER'}
+                </button>
+              </div>
+
+              {triggersError && <div className="error-box" style={{ margin: '0 0 12px' }}><strong>ERR:</strong> {triggersError}</div>}
+
+              {triggersLoading && (
+                <div className="data-loading"><span className="blink">█</span> LOADING TRIGGERS…</div>
+              )}
+
+              {!triggersLoading && triggers.length === 0 && !triggersError && (
+                <div className="data-empty">
+                  <Clock size={28} style={{ color: 'var(--muted)', marginBottom: 12 }} />
+                  <p>NO TRIGGERS CONFIGURED</p>
+                  <p className="data-empty-sub">Create a trigger above to run a mission on a schedule.</p>
+                </div>
+              )}
+
+              {!triggersLoading && triggers.length > 0 && (
+                <div className="data-table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>STATE</th>
+                        <th>NAME</th>
+                        <th>CRON</th>
+                        <th>NEXT RUN</th>
+                        <th>LAST RUN</th>
+                        <th style={{ textAlign: 'right' }}>ACTIONS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {triggers.map(t => (
+                        <tr key={t.id}>
+                          <td>
+                            <span
+                              className="fit-badge"
+                              style={{
+                                color: t.enabled ? 'var(--success)' : 'var(--muted)',
+                                borderColor: (t.enabled ? 'var(--success)' : 'var(--muted)') + '44',
+                                cursor: 'pointer',
+                              }}
+                              onClick={() => toggleTrigger(t)}
+                              title="Click to toggle enabled state"
+                            >
+                              {t.enabled ? 'ON' : 'OFF'}
+                            </span>
+                          </td>
+                          <td className="td-name" title={t.prompt_template}>{t.name}</td>
+                          <td className="td-id">{t.schedule_cron}</td>
+                          <td className="td-muted">{t.next_run_at ?? '—'}</td>
+                          <td className="td-muted">{t.last_run_at ?? '—'}</td>
+                          <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                            <button
+                              type="button"
+                              className="toolbar-btn"
+                              onClick={() => fireTrigger(t)}
+                              title="Fire now"
+                              style={{ marginRight: 6 }}
+                            >
+                              <Play size={11} /> FIRE
+                            </button>
+                            <button
+                              type="button"
+                              className="toolbar-btn"
+                              onClick={() => deleteTrigger(t)}
+                              title="Delete trigger"
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
