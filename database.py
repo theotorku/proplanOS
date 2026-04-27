@@ -139,6 +139,24 @@ class TriggerRunModel(BaseModel):
     fired_at: Optional[str] = None
 
 
+class JobModel(BaseModel):
+    """Durable job queue row. Each job is dispatched by kind; payload carries
+    the dispatcher's args. Workers atomically claim via the claim_jobs RPC."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    kind: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    status: str = "queued"           # queued | claimed | done | failed
+    attempts: int = 0
+    max_attempts: int = 3
+    claimed_at: Optional[str] = None
+    claimed_by: Optional[str] = None
+    scheduled_for: Optional[str] = None
+    last_error: Optional[str] = None
+    run_id: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class AgentSessionModel(BaseModel):
     """Agent session record matching the Supabase agent_sessions table."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -208,6 +226,13 @@ class DatabaseProvider(Protocol):
     def create_trigger_run(self, run: "TriggerRunModel") -> "TriggerRunModel": ...
     def list_trigger_runs(self, trigger_id: str, limit: int = 20) -> List["TriggerRunModel"]: ...
 
+    # Jobs (durable queue)
+    def enqueue_job(self, job: "JobModel") -> "JobModel": ...
+    def claim_jobs(self, worker_id: str, limit: int = 5, stale_seconds: int = 600) -> List["JobModel"]: ...
+    def mark_job_done(self, job_id: str) -> None: ...
+    def mark_job_failed(self, job_id: str, error: str, retry: bool = True, backoff_seconds: int = 60) -> None: ...
+    def list_jobs(self, status: Optional[str] = None, limit: int = 50) -> List["JobModel"]: ...
+
 
 # ============================================================
 # IN-MEMORY DATABASE (Development / Testing)
@@ -226,6 +251,7 @@ class InMemoryDatabase:
         self.chat_messages: List[ChatMessageModel] = []
         self.triggers: Dict[str, TriggerModel] = {}
         self.trigger_runs: List[TriggerRunModel] = []
+        self.jobs: Dict[str, JobModel] = {}
         logging.info("Initialized InMemoryDatabase")
 
     def get_leads(self, min_score: Optional[float] = None,
@@ -399,6 +425,74 @@ class InMemoryDatabase:
         with self._lock:
             runs = [r for r in self.trigger_runs if r.trigger_id == trigger_id]
         return list(reversed(runs))[:limit]
+
+    # ---- Jobs ----
+    def enqueue_job(self, job: JobModel) -> JobModel:
+        now = datetime.now(timezone.utc).isoformat()
+        job.created_at = job.created_at or now
+        job.updated_at = now
+        job.scheduled_for = job.scheduled_for or now
+        with self._lock:
+            self.jobs[job.id] = job
+        return job
+
+    def claim_jobs(self, worker_id: str, limit: int = 5, stale_seconds: int = 600) -> List[JobModel]:
+        now_dt = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat()
+        claimed: List[JobModel] = []
+        with self._lock:
+            candidates = []
+            for j in self.jobs.values():
+                if j.status == "queued" and (j.scheduled_for or "") <= now_iso:
+                    candidates.append(j)
+                elif j.status == "claimed" and j.claimed_at:
+                    try:
+                        age = (now_dt - datetime.fromisoformat(j.claimed_at)).total_seconds()
+                        if age >= stale_seconds:
+                            candidates.append(j)
+                    except Exception:
+                        pass
+            candidates.sort(key=lambda x: x.scheduled_for or "")
+            for j in candidates[:limit]:
+                j.status = "claimed"
+                j.claimed_at = now_iso
+                j.claimed_by = worker_id
+                j.attempts += 1
+                j.updated_at = now_iso
+                claimed.append(j)
+        return claimed
+
+    def mark_job_done(self, job_id: str) -> None:
+        with self._lock:
+            j = self.jobs.get(job_id)
+            if not j:
+                return
+            j.status = "done"
+            j.updated_at = datetime.now(timezone.utc).isoformat()
+
+    def mark_job_failed(self, job_id: str, error: str, retry: bool = True, backoff_seconds: int = 60) -> None:
+        with self._lock:
+            j = self.jobs.get(job_id)
+            if not j:
+                return
+            j.last_error = error
+            j.updated_at = datetime.now(timezone.utc).isoformat()
+            if retry and j.attempts < j.max_attempts:
+                j.status = "queued"
+                next_dt = datetime.now(timezone.utc).timestamp() + backoff_seconds
+                j.scheduled_for = datetime.fromtimestamp(next_dt, tz=timezone.utc).isoformat()
+                j.claimed_at = None
+                j.claimed_by = None
+            else:
+                j.status = "failed"
+
+    def list_jobs(self, status: Optional[str] = None, limit: int = 50) -> List[JobModel]:
+        with self._lock:
+            results = list(self.jobs.values())
+        if status:
+            results = [j for j in results if j.status == status]
+        results.sort(key=lambda j: j.created_at or "", reverse=True)
+        return results[:limit]
 
 
 # ============================================================
@@ -737,6 +831,77 @@ class SupabaseDatabase:
             return [TriggerRunModel(**row) for row in result.data]
         except Exception as e:
             logging.warning("SupabaseDatabase.list_trigger_runs failed: %s", e)
+            return []
+
+    # ---- Jobs ----
+    def enqueue_job(self, job: JobModel) -> JobModel:
+        try:
+            data = job.model_dump(exclude_none=True)
+            self.client.table("jobs").insert(data).execute()
+            return job
+        except Exception as e:
+            logging.error("SupabaseDatabase.enqueue_job failed: %s", e, exc_info=True)
+            raise
+
+    def claim_jobs(self, worker_id: str, limit: int = 5, stale_seconds: int = 600) -> List[JobModel]:
+        try:
+            result = self.client.rpc("claim_jobs", {
+                "p_worker_id": worker_id,
+                "p_limit": limit,
+                "p_stale_seconds": stale_seconds,
+            }).execute()
+            return [JobModel(**row) for row in (result.data or [])]
+        except Exception as e:
+            logging.warning("SupabaseDatabase.claim_jobs failed: %s", e)
+            return []
+
+    def mark_job_done(self, job_id: str) -> None:
+        try:
+            self.client.table("jobs").update({
+                "status": "done",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", job_id).execute()
+        except Exception as e:
+            logging.error("SupabaseDatabase.mark_job_done failed: %s", e, exc_info=True)
+
+    def mark_job_failed(self, job_id: str, error: str, retry: bool = True, backoff_seconds: int = 60) -> None:
+        try:
+            row = self.client.table("jobs").select("*").eq("id", job_id).limit(1).execute()
+            if not row.data:
+                return
+            j = JobModel(**row.data[0])
+            now_iso = datetime.now(timezone.utc).isoformat()
+            if retry and j.attempts < j.max_attempts:
+                next_iso = datetime.fromtimestamp(
+                    datetime.now(timezone.utc).timestamp() + backoff_seconds,
+                    tz=timezone.utc,
+                ).isoformat()
+                self.client.table("jobs").update({
+                    "status": "queued",
+                    "scheduled_for": next_iso,
+                    "claimed_at": None,
+                    "claimed_by": None,
+                    "last_error": error,
+                    "updated_at": now_iso,
+                }).eq("id", job_id).execute()
+            else:
+                self.client.table("jobs").update({
+                    "status": "failed",
+                    "last_error": error,
+                    "updated_at": now_iso,
+                }).eq("id", job_id).execute()
+        except Exception as e:
+            logging.error("SupabaseDatabase.mark_job_failed failed: %s", e, exc_info=True)
+
+    def list_jobs(self, status: Optional[str] = None, limit: int = 50) -> List[JobModel]:
+        try:
+            query = self.client.table("jobs").select("*")
+            if status:
+                query = query.eq("status", status)
+            result = query.order("created_at", desc=True).limit(limit).execute()
+            return [JobModel(**row) for row in result.data]
+        except Exception as e:
+            logging.warning("SupabaseDatabase.list_jobs failed: %s", e)
             return []
 
 

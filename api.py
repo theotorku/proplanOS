@@ -50,6 +50,7 @@ from database import (
     BusinessProfileModel,
     TriggerModel,
     TriggerRunModel,
+    JobModel,
     extract_leads_from_memory,
     extract_campaigns_from_memory,
 )
@@ -57,6 +58,7 @@ from llm import AnthropicPlannerProvider, AnthropicAgentProvider
 from chat_routes import router as chat_router
 from scheduler import TriggerScheduler, compute_next_run, validate_cron
 from events import emit_event, MAX_EVENT_DEPTH
+from jobs import JobWorker
 
 try:
     from tasks import celery_app, run_orchestrator
@@ -461,13 +463,31 @@ def agent_run(body: AgentRunRequest, background_tasks: BackgroundTasks):
             detail=f"Could not dispatch run: {type(e).__name__}: {e}",
         ) from e
 
-    background_tasks.add_task(
-        _run_orchestrator_bg,
-        run_id,
-        body.request,
-        body.business_context,
-        body.user_id,
-    )
+    if _job_worker_alive():
+        try:
+            db.enqueue_job(JobModel(
+                kind="orchestrator_run",
+                payload={
+                    "run_id": run_id,
+                    "request": body.request,
+                    "business_context": body.business_context,
+                    "user_id": body.user_id,
+                    "event_depth": 0,
+                },
+                run_id=run_id,
+            ))
+        except Exception as e:
+            logging.error("enqueue_job failed (run=%s): %s", run_id, e, exc_info=True)
+            background_tasks.add_task(
+                _run_orchestrator_bg,
+                run_id, body.request, body.business_context, body.user_id,
+            )
+    else:
+        # No worker running (test harness, single-shot CLI) — run inline.
+        background_tasks.add_task(
+            _run_orchestrator_bg,
+            run_id, body.request, body.business_context, body.user_id,
+        )
     return {"status": "running", "run_id": run_id}
 
 
@@ -589,12 +609,25 @@ def _fire_trigger(trigger: TriggerModel, context: Optional[Dict[str, Any]] = Non
             },
             started_at=datetime.now(timezone.utc).isoformat(),
         ))
-        threading.Thread(
-            target=_run_orchestrator_bg,
-            args=(run_id, prompt, business_context, trigger.user_id, depth),
-            name=f"trigger-{trigger.id[:8]}",
-            daemon=True,
-        ).start()
+        if _job_worker_alive():
+            db.enqueue_job(JobModel(
+                kind="orchestrator_run",
+                payload={
+                    "run_id": run_id,
+                    "request": prompt,
+                    "business_context": business_context,
+                    "user_id": trigger.user_id,
+                    "event_depth": depth,
+                },
+                run_id=run_id,
+            ))
+        else:
+            threading.Thread(
+                target=_run_orchestrator_bg,
+                args=(run_id, prompt, business_context, trigger.user_id, depth),
+                name=f"trigger-{trigger.id[:8]}",
+                daemon=True,
+            ).start()
     except Exception as e:
         audit_status = "failed"
         audit_error = f"{type(e).__name__}: {e}"
@@ -626,6 +659,29 @@ def _fire_trigger(trigger: TriggerModel, context: Optional[Dict[str, Any]] = Non
 
 
 _scheduler = TriggerScheduler(db, _fire_trigger)
+_job_worker = JobWorker(db)
+
+
+def _job_worker_alive() -> bool:
+    """True only when the durable worker thread is actually running.
+    Tests using TestClient never trigger startup events, so we fall back
+    to inline dispatch when this is False."""
+    return bool(_job_worker._thread and _job_worker._thread.is_alive())
+
+
+def _handle_orchestrator_run_job(payload: Dict[str, Any]) -> None:
+    """Job handler — unpacks payload and runs the orchestrator inline.
+    Raising propagates to the worker, which retries with backoff."""
+    _run_orchestrator_bg(
+        run_id=payload["run_id"],
+        request=payload["request"],
+        business_context=payload.get("business_context"),
+        user_id=payload["user_id"],
+        event_depth=payload.get("event_depth", 0),
+    )
+
+
+_job_worker.register("orchestrator_run", _handle_orchestrator_run_job)
 
 
 @app.on_event("startup")
@@ -636,9 +692,22 @@ def _start_scheduler() -> None:
     _scheduler.start()
 
 
+@app.on_event("startup")
+def _start_job_worker() -> None:
+    if os.environ.get("DISABLE_JOB_WORKER") == "1":
+        logging.info("JobWorker disabled via DISABLE_JOB_WORKER env var")
+        return
+    _job_worker.start()
+
+
 @app.on_event("shutdown")
 def _stop_scheduler() -> None:
     _scheduler.stop()
+
+
+@app.on_event("shutdown")
+def _stop_job_worker() -> None:
+    _job_worker.stop()
 
 
 _VALID_EVENT_TYPES = {"cron", "webhook", "lead.created", "run.completed"}
