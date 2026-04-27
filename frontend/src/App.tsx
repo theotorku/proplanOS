@@ -305,6 +305,7 @@ function AppShell({ userId }: { userId: string }) {
 
   // Mission polling: elapsed timer + cancellation
   const [elapsedMs, setElapsedMs] = useState(0);
+  const [liveProgress, setLiveProgress] = useState<TaskMemory[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
   const outputRef = useRef<HTMLDivElement>(null);
@@ -575,6 +576,7 @@ function AppShell({ userId }: { userId: string }) {
     setIsRunning(true);
     setMissionError(null);
     setResponse(null);
+    setLiveProgress([]);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -615,6 +617,9 @@ function AppShell({ userId }: { userId: string }) {
         });
         if (!poll.ok) throw new Error(`Poll failed: HTTP ${poll.status}`);
         const data = await poll.json();
+        if (data.status === 'running' && data.progress?.memory) {
+          setLiveProgress(data.progress.memory as TaskMemory[]);
+        }
         if (data.status === 'completed') { setResponse(data.result); return; }
         if (data.status === 'failed')    { throw new Error(data.error || 'Mission failed.'); }
       }
@@ -993,6 +998,28 @@ function AppShell({ userId }: { userId: string }) {
                         {line}
                       </div>
                     ))}
+                    {liveProgress.length > 0 && (
+                      <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                        <div style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--muted)', marginBottom: 6 }}>
+                          LIVE · {liveProgress.length} TASK{liveProgress.length !== 1 ? 'S' : ''} COMPLETED
+                        </div>
+                        {liveProgress.slice(-6).map((entry, i) => {
+                          const ok = entry.result?.success;
+                          const agent = entry.task?.agent ?? '?';
+                          return (
+                            <div key={`${entry.task?.id ?? i}`} className="proc-line" style={{ fontSize: 11 }}>
+                              <span style={{ color: ok ? 'var(--success)' : 'var(--error)' }}>
+                                {ok ? '✓' : '✗'}
+                              </span>
+                              {' '}
+                              <span style={{ color: 'var(--accent)' }}>{agent.toUpperCase()}</span>
+                              {' · '}
+                              <span style={{ color: 'var(--muted)' }}>{entry.task?.action ?? 'execute'}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                     <div className="proc-line proc-cursor"><span className="blink">█</span></div>
                   </div>
                 )}

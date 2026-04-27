@@ -161,7 +161,27 @@ def _run_orchestrator_bg(run_id: str, request: str, business_context: Optional[s
 
     try:
         orchestrator = create_orchestrator()
-        result = orchestrator.run(request, business_context=business_context)
+
+        def _on_progress(snapshot: Dict[str, Any]) -> None:
+            try:
+                db.update_run_session(
+                    run_id,
+                    output_data={
+                        "in_progress": True,
+                        "memory": snapshot.get("memory", []),
+                        "total_cost": snapshot.get("total_cost", 0.0),
+                        "cost_breakdown": snapshot.get("cost_breakdown", {}),
+                        "step": snapshot.get("step", 0),
+                    },
+                )
+            except Exception as upd_err:
+                logging.warning("progress update failed (run=%s): %s", run_id, upd_err)
+
+        result = orchestrator.run(
+            request,
+            business_context=business_context,
+            on_progress=_on_progress,
+        )
 
         extracted = extract_leads_from_memory(result.get("memory", []))
         leads_extracted = len(extracted)
@@ -416,7 +436,8 @@ def agent_run_status(run_id: str):
         raise HTTPException(status_code=404, detail="Run not found.")
 
     if session.status == "running":
-        return {"status": "running"}
+        progress = session.output_data if isinstance(session.output_data, dict) else None
+        return {"status": "running", "progress": progress}
     if session.status == "completed":
         return {"status": "completed", "result": session.output_data}
     # status == "failed" (or any other terminal state we set)

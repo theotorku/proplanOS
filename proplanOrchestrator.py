@@ -639,7 +639,8 @@ class Orchestrator:
             self.logger.log(
                 "WARN", f"Retry {task.retries}/{task.max_retries}", {"task_id": task.id})
 
-    def run(self, request: str, business_context: Optional[str] = None) -> Dict[str, Any]:
+    def run(self, request: str, business_context: Optional[str] = None,
+            on_progress: Optional[Any] = None) -> Dict[str, Any]:
         """
         Execute the full orchestration loop.
 
@@ -702,6 +703,17 @@ class Orchestrator:
             for task in tasks:
                 result = self.execute_task(task)
                 batch_results.append(result)
+                if on_progress is not None:
+                    try:
+                        on_progress({
+                            "memory": list(self.memory.history),
+                            "total_cost": self.cost_tracker.total_cost,
+                            "cost_breakdown": dict(self.cost_tracker.per_task),
+                            "step": steps,
+                        })
+                    except Exception as cb_err:
+                        self.logger.log("WARN", "on_progress callback raised",
+                                        {"run_id": run_id, "error": str(cb_err)})
 
             # Evaluate this batch only (FIX 1)
             decision = self.evaluator.evaluate(goal, batch_results)
