@@ -420,6 +420,12 @@ class SupabaseDatabase:
             # other nullable string) impossible to clear once saved.
             raw = profile.model_dump()
             data = {k: (None if isinstance(v, str) and v == "" else v) for k, v in raw.items()}
+            # Don't send created_at=None on first insert — the column is NOT NULL
+            # with a default. Letting the DB default populate it preserves the
+            # original value on subsequent upserts (Postgres only overwrites
+            # columns we send).
+            if data.get("created_at") is None:
+                data.pop("created_at", None)
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
             self.client.table("business_profiles").upsert(data, on_conflict="user_id").execute()
             return profile
