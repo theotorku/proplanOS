@@ -80,11 +80,12 @@ class AnthropicPlannerProvider:
 # actually owns — Claude was hallucinating field names (e.g. {"copy": "..."}
 # for generate_copy_tool) when given only a generic search example.
 TOOL_PAYLOAD_EXAMPLES: Dict[str, str] = {
-    "find_leads_tool":      '{"query": "B2B SaaS founders in NYC", "count": 5}',
-    "generate_copy_tool":   '{"input": "Cold outreach to a VP of Sales at a Series A SaaS company", "type": "email"}',
-    "search_knowledge_base": '{"query": "refund policy"}',
-    "schedule_task":        '{"task_name": "Follow up with lead #123", "due_date": "2026-04-25"}',
-    "run_workflow":         '{"workflow_name": "weekly_outreach", "steps": ["enrich", "send", "log"]}',
+    "find_leads_tool":          '{"query": "B2B SaaS founders in NYC", "count": 5}',
+    "generate_copy_tool":       '{"input": "Cold outreach to a VP of Sales at a Series A SaaS company", "type": "email"}',
+    "search_knowledge_base":    '{"query": "refund policy"}',
+    "schedule_task":            '{"task_name": "Follow up with lead #123", "due_date": "2026-04-25"}',
+    "run_workflow":             '{"workflow_name": "weekly_outreach", "steps": ["enrich", "send", "log"]}',
+    "create_onboarding_record": '{"customer_name": "Austin HVAC Pros", "industry": "HVAC", "location": "Austin, TX", "primary_contact": "Mike Reynolds", "plan": "founding"}',
 }
 
 

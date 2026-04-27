@@ -36,9 +36,9 @@ except ImportError:
 from proplanOrchestrator import (
     Orchestrator, Tool, SalesAgent, MarketingAgent, SupportAgent, OpsAgent,
     SecurityPolicy, find_leads_tool, generate_copy_tool, search_knowledge_base,
-    schedule_task, run_workflow,
+    schedule_task, run_workflow, create_onboarding_record,
     FindLeadsSchema, GenerateCopySchema, SearchKnowledgeBaseSchema,
-    ScheduleTaskSchema, RunWorkflowSchema
+    ScheduleTaskSchema, RunWorkflowSchema, CreateOnboardingRecordSchema,
 )
 from database import (
     get_database,
@@ -288,6 +288,12 @@ def create_orchestrator() -> Orchestrator:
         function=run_workflow,
         cost_estimate=0.01
     ))
+    orchestrator.register_tool(Tool(
+        name="create_onboarding_record",
+        schema=CreateOnboardingRecordSchema,
+        function=create_onboarding_record,
+        cost_estimate=0.005
+    ))
 
     def get_agent_llm(name: str, tools: str):
         return AnthropicAgentProvider(api_key, name, tools) if api_key else None
@@ -297,7 +303,7 @@ def create_orchestrator() -> Orchestrator:
     orchestrator.register_agent(MarketingAgent, llm_provider=get_agent_llm(
         "marketing", "generate_copy_tool"))
     orchestrator.register_agent(SupportAgent, llm_provider=get_agent_llm(
-        "support", "search_knowledge_base"))
+        "support", "search_knowledge_base, create_onboarding_record"))
     orchestrator.register_agent(OpsAgent, llm_provider=get_agent_llm(
         "ops", "schedule_task, run_workflow"))
 

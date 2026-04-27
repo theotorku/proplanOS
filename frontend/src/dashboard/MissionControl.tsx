@@ -173,8 +173,19 @@ export default function MissionControl({
     });
   }, [runs]);
 
-  // ── Replay from last completed mission ─────────────────
-  const replay = response?.memory?.slice(0, 6) ?? [];
+  // ── Replay: prefer the in-flight response, otherwise fall back to the
+  //    most recent completed run so the panel survives a page refresh and
+  //    populates even when the user lands on Mission Control without
+  //    having just dispatched a mission.
+  const replay = useMemo(() => {
+    if (response?.memory?.length) return response.memory.slice(0, 6);
+    const lastCompleted = runs.find(r => {
+      const mem = (r.output_data as unknown as { memory?: TaskMemory[] } | null)?.memory;
+      return Array.isArray(mem) && mem.length > 0;
+    });
+    const mem = (lastCompleted?.output_data as unknown as { memory?: TaskMemory[] } | null)?.memory;
+    return mem ? mem.slice(0, 6) : [];
+  }, [response, runs]);
 
   return (
     <div className="mc-wrap">

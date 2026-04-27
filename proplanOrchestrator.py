@@ -18,7 +18,7 @@ import logging
 import os
 import re
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -761,6 +761,15 @@ class ScheduleTaskSchema(BaseModel):
     due_date: Optional[str] = None
 
 
+class CreateOnboardingRecordSchema(BaseModel):
+    customer_name: str
+    industry: Optional[str] = None
+    location: Optional[str] = None
+    plan: Optional[str] = "founding"
+    primary_contact: Optional[str] = None
+    notes: Optional[str] = None
+
+
 class RunWorkflowSchema(BaseModel):
     workflow_name: str
     steps: Optional[List[str]] = None
@@ -892,6 +901,44 @@ def search_knowledge_base(payload):
             return {"answer": result.strip(), "confidence": 0.85}
 
     return {"answer": f"Based on best practices for '{query}': recommend reviewing your current process and aligning with team goals.", "confidence": 0.75}
+
+
+def create_onboarding_record(payload):
+    """
+    Create a structured onboarding record for a new customer.
+
+    Returns a typed dict matching the CreateOnboardingRecordSchema fields plus
+    a derived 14-day milestone schedule. Always returns structured data — no
+    free-text answers — so SUPP-03 can serve as a registry writer rather than
+    an advisory chatbot.
+    """
+    customer_name = (payload.get("customer_name") or "").strip() or "Unknown Customer"
+    industry = payload.get("industry") or None
+    location = payload.get("location") or None
+    plan = payload.get("plan") or "founding"
+    primary_contact = payload.get("primary_contact") or None
+    notes = payload.get("notes") or None
+
+    today = datetime.now(timezone.utc).date()
+    milestones = [
+        {"day": 1,  "milestone": "Welcome call + account provisioning",       "due": str(today + timedelta(days=1))},
+        {"day": 3,  "milestone": "Integration kickoff (calendar, CRM, Slack)", "due": str(today + timedelta(days=3))},
+        {"day": 7,  "milestone": "Day-7 check-in + first mission review",      "due": str(today + timedelta(days=7))},
+        {"day": 14, "milestone": "Day-14 retro + plan adjustments",            "due": str(today + timedelta(days=14))},
+    ]
+
+    return {
+        "record_type": "onboarding",
+        "status": "active",
+        "customer_name": customer_name,
+        "industry": industry,
+        "location": location,
+        "plan": plan,
+        "primary_contact": primary_contact,
+        "notes": notes,
+        "milestones": milestones,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def schedule_task(payload):
