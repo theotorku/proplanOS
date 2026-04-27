@@ -59,7 +59,7 @@ class AnthropicPlannerProvider:
         logging.info("Anthropic Planner | Calling %s...", self.model)
         response = self.client.messages.create(
             model=self.model,
-            max_tokens=1024,
+            max_tokens=4096,
             system=system,
             messages=messages,
         )
