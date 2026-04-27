@@ -54,6 +54,7 @@ export type MissionControlProps = {
   agents: Record<string, AgentMeta>;
   templates: string[];
   onUseTemplate: (t: string) => void;
+  onTestAgent?: (agentKey: string) => void;
 };
 
 function fmtTs(iso: string | null): string {
@@ -80,7 +81,7 @@ function bandColor(band: 'HIGH' | 'MID' | 'LOW'): string {
 }
 
 export default function MissionControl({
-  leads, runs, response, isRunning, companyName, agents, templates, onUseTemplate,
+  leads, runs, response, isRunning, companyName, agents, templates, onUseTemplate, onTestAgent,
 }: MissionControlProps) {
   // ── KPIs ────────────────────────────────────────────────
   const totalLeads = leads.length;
@@ -272,6 +273,25 @@ export default function MissionControl({
                       <span className="v">${s.cost.toFixed(2)}</span>
                     </div>
                   </div>
+                  {onTestAgent && (
+                    <button
+                      type="button"
+                      className="mc-agent-test"
+                      onClick={() => onTestAgent(key)}
+                      disabled={isRunning}
+                      title={`Run a quick test mission for ${a.label}`}
+                      style={{
+                        marginTop: 8, width: '100%', padding: '6px 10px',
+                        fontSize: 10, letterSpacing: '0.08em', fontFamily: 'inherit',
+                        background: 'transparent', color: a.color,
+                        border: `1px solid ${a.color}55`, borderRadius: 3,
+                        cursor: isRunning ? 'not-allowed' : 'pointer',
+                        opacity: isRunning ? 0.4 : 1,
+                      }}
+                    >
+                      ▶ TEST AGENT
+                    </button>
+                  )}
                 </article>
               );
             })}

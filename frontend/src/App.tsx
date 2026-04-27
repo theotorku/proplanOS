@@ -138,6 +138,14 @@ type Lead = {
   full_name: string;
   icp_score: number | null;
   source: string;
+  email?: string | null;
+  phone?: string | null;
+  company_name?: string | null;
+  role?: string | null;
+  inquiry_type?: string | null;
+  qualification_status?: string | null;
+  qualification_rationale?: string | null;
+  created_at?: string | null;
 };
 
 type Campaign = {
@@ -281,6 +289,7 @@ function AppShell({ userId }: { userId: string }) {
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [leadsError, setLeadsError] = useState<string | null>(null);
   const [minScore, setMinScore]     = useState(0);
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
 
   // Campaigns state
   const [campaigns, setCampaigns]           = useState<Campaign[]>([]);
@@ -672,6 +681,26 @@ function AppShell({ userId }: { userId: string }) {
     setTimeout(() => inputRef.current?.focus(), 0);
   };
 
+  const AGENT_TEST_PROMPTS: Record<string, string> = {
+    sales:     'Find 3 B2B SaaS founders in NYC and qualify them for outreach.',
+    marketing: 'Draft a cold email for a VP of Sales at a Series A SaaS company.',
+    support:   'Search the knowledge base for our refund policy and summarize it.',
+    ops:       'Schedule a follow-up task for lead #123 due in 3 days.',
+  };
+
+  const testAgent = (agentKey: string) => {
+    const t = AGENT_TEST_PROMPTS[agentKey];
+    if (!t) return;
+    setPrompt(t);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(0, el.value.length);
+      }
+    });
+  };
+
   const useTemplate = (t: string) => {
     setPrompt(t);
     // Select all text so next keystroke replaces the template.
@@ -942,6 +971,7 @@ function AppShell({ userId }: { userId: string }) {
                     agents={AGENTS}
                     templates={TEMPLATES}
                     onUseTemplate={useTemplate}
+                    onTestAgent={testAgent}
                   />
                 )}
 
@@ -1248,7 +1278,12 @@ function AppShell({ userId }: { userId: string }) {
                     </thead>
                     <tbody>
                       {leads.map((lead, i) => (
-                        <tr key={lead.id}>
+                        <tr
+                          key={lead.id}
+                          onClick={() => setSelectedLead(lead)}
+                          style={{ cursor: 'pointer' }}
+                          title="Click for details"
+                        >
                           <td className="td-muted">{String(i + 1).padStart(2, '0')}</td>
                           <td className="td-name">{lead.full_name}</td>
                           <td>
@@ -1276,6 +1311,71 @@ function AppShell({ userId }: { userId: string }) {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+
+              {selectedLead && (
+                <div
+                  onClick={() => setSelectedLead(null)}
+                  style={{
+                    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+                    zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    padding: 20,
+                  }}
+                >
+                  <div
+                    onClick={e => e.stopPropagation()}
+                    style={{
+                      background: 'var(--bg, #0a0a0a)',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      borderRadius: 6,
+                      maxWidth: 560, width: '100%', maxHeight: '85vh', overflow: 'auto',
+                      padding: 20, fontSize: 12, fontFamily: 'inherit',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>{selectedLead.full_name}</div>
+                        <div style={{ color: 'var(--muted)', fontSize: 11 }}>{selectedLead.id}</div>
+                      </div>
+                      <button
+                        type="button"
+                        className="toolbar-btn"
+                        onClick={() => setSelectedLead(null)}
+                        style={{ marginLeft: 12 }}
+                      >
+                        <XCircle size={11} /> CLOSE
+                      </button>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '8px 12px' }}>
+                      <div style={{ color: 'var(--muted)' }}>SCORE</div>
+                      <div style={{ color: scoreColor(selectedLead.icp_score ?? 0) }}>
+                        {selectedLead.icp_score ?? '—'}
+                      </div>
+                      <div style={{ color: 'var(--muted)' }}>STATUS</div>
+                      <div>{selectedLead.qualification_status ?? '—'}</div>
+                      <div style={{ color: 'var(--muted)' }}>EMAIL</div>
+                      <div style={{ wordBreak: 'break-all' }}>{selectedLead.email ?? '—'}</div>
+                      <div style={{ color: 'var(--muted)' }}>PHONE</div>
+                      <div>{selectedLead.phone ?? '—'}</div>
+                      <div style={{ color: 'var(--muted)' }}>COMPANY</div>
+                      <div>{selectedLead.company_name ?? '—'}</div>
+                      <div style={{ color: 'var(--muted)' }}>ROLE</div>
+                      <div>{selectedLead.role ?? '—'}</div>
+                      <div style={{ color: 'var(--muted)' }}>INQUIRY</div>
+                      <div>{selectedLead.inquiry_type ?? '—'}</div>
+                      <div style={{ color: 'var(--muted)' }}>SOURCE</div>
+                      <div>{selectedLead.source}</div>
+                      <div style={{ color: 'var(--muted)' }}>CREATED</div>
+                      <div>{selectedLead.created_at ?? '—'}</div>
+                      {selectedLead.qualification_rationale && (
+                        <>
+                          <div style={{ color: 'var(--muted)' }}>RATIONALE</div>
+                          <div style={{ lineHeight: 1.5 }}>{selectedLead.qualification_rationale}</div>
+                        </>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
