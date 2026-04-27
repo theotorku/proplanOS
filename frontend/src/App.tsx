@@ -1631,7 +1631,7 @@ function AppShell({ userId }: { userId: string }) {
                     </p>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
                       {(() => {
-                        const testDisabled = slackBusy || !profileDraft.slack_webhook_url.trim();
+                        const testDisabled = slackBusy || !profileDraft.slack_webhook_url?.trim();
                         return (
                           <button
                             type="button"
