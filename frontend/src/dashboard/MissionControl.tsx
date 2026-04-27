@@ -7,6 +7,8 @@ type Lead = {
   full_name: string;
   icp_score: number | null;
   source: string;
+  company_name?: string | null;
+  role?: string | null;
 };
 
 type RunHistory = {
@@ -70,6 +72,23 @@ function short(s: string, max = 52): string {
   return s.length <= max ? s : s.slice(0, max - 1) + '…';
 }
 
+// Pull the most descriptive string out of a task payload so each replay
+// step shows what was actually run, not just the verb. Prefers human-
+// facing fields (request, query, name) before falling back to the first
+// non-trivial scalar.
+function payloadDetail(payload: Record<string, unknown> | undefined | null): string {
+  if (!payload || typeof payload !== 'object') return '';
+  const preferred = ['request', 'query', 'objective', 'topic', 'name', 'subject', 'lead_id', 'campaign'];
+  for (const k of preferred) {
+    const v = payload[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  for (const v of Object.values(payload)) {
+    if (typeof v === 'string' && v.trim() && v.length < 120) return v.trim();
+  }
+  return '';
+}
+
 function scoreBand(s: number): 'HIGH' | 'MID' | 'LOW' {
   if (s >= 70) return 'HIGH';
   if (s >= 40) return 'MID';
@@ -100,18 +119,30 @@ export default function MissionControl({
   const totalSpend = runs.reduce((a, r) => a + (r.cost_usd ?? 0), 0);
 
   // ── 14-day pipeline chart ───────────────────────────────
+  // Both bucket keys and run keys must use the *local* calendar date — using
+  // toISOString() applies UTC, which can drop today's runs into yesterday's
+  // bucket (or hide them entirely) for users west of UTC.
+  const localDateKey = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
   const chartData = useMemo(() => {
     const days: { label: string; iso: string; count: number }[] = [];
     for (let i = 13; i >= 0; i--) {
       const d = new Date();
       d.setHours(0, 0, 0, 0);
       d.setDate(d.getDate() - i);
-      const iso = d.toISOString().slice(0, 10);
-      days.push({ label: d.toLocaleDateString(undefined, { day: '2-digit' }), iso, count: 0 });
+      days.push({
+        label: d.toLocaleDateString(undefined, { day: '2-digit' }),
+        iso: localDateKey(d),
+        count: 0,
+      });
     }
     for (const r of runs) {
       if (!r.started_at) continue;
-      const key = new Date(r.started_at).toISOString().slice(0, 10);
+      const key = localDateKey(new Date(r.started_at));
       const slot = days.find(x => x.iso === key);
       if (slot) slot.count += 1;
     }
@@ -177,15 +208,29 @@ export default function MissionControl({
   // ── Replay: prefer the in-flight response, otherwise fall back to the
   //    most recent completed run so the panel survives a page refresh and
   //    populates even when the user lands on Mission Control without
-  //    having just dispatched a mission.
+  //    having just dispatched a mission. Header label tracks the same
+  //    source so we never show "No recent run" alongside actual steps.
   const replay = useMemo(() => {
-    if (response?.memory?.length) return response.memory.slice(0, 6);
+    if (response?.memory?.length) {
+      return {
+        steps: response.memory.slice(0, 6),
+        label: `run ${response.run_id.slice(0, 8)}`,
+      };
+    }
     const lastCompleted = runs.find(r => {
       const mem = (r.output_data as unknown as { memory?: TaskMemory[] } | null)?.memory;
       return Array.isArray(mem) && mem.length > 0;
     });
     const mem = (lastCompleted?.output_data as unknown as { memory?: TaskMemory[] } | null)?.memory;
-    return mem ? mem.slice(0, 6) : [];
+    if (lastCompleted && mem) {
+      const ts = lastCompleted.started_at ? fmtTs(lastCompleted.started_at) : '';
+      const rid = (lastCompleted.run_id ?? lastCompleted.id).slice(0, 8);
+      return {
+        steps: mem.slice(0, 6),
+        label: ts ? `last run ${rid} · ${ts}` : `last run ${rid}`,
+      };
+    }
+    return { steps: [], label: 'No recent run' };
   }, [response, runs]);
 
   return (
@@ -394,7 +439,11 @@ export default function MissionControl({
               <>
                 <div className="mc-lead-name">{topLead.full_name}</div>
                 <div className="mc-lead-source">
-                  Source · {topLead.source || '—'}
+                  {[
+                    topLead.source ? `Source · ${topLead.source}` : null,
+                    topLead.company_name ? topLead.company_name : null,
+                    topLead.role ? topLead.role : null,
+                  ].filter(Boolean).join('  ·  ') || 'Unattributed lead'}
                 </div>
                 <div className="mc-lead-score">
                   <span className="mc-lead-score-num" style={{ color: topBandC }}>
@@ -450,15 +499,17 @@ export default function MissionControl({
         <section className="mc-card">
           <header className="mc-card-header">
             <span className="mc-card-title">Mission Replay</span>
-            <span className="mc-card-meta">{response ? `run ${response.run_id.slice(0, 8)}` : 'No recent run'}</span>
+            <span className="mc-card-meta">{replay.label}</span>
           </header>
           <div className="mc-replay">
-            {replay.length === 0 ? (
+            {replay.steps.length === 0 ? (
               <div className="mc-replay-empty">Replay appears here after a mission completes.</div>
-            ) : replay.map((m, i) => {
+            ) : replay.steps.map((m, i) => {
               const a = agents[m.task.agent.toLowerCase()];
               const color = a?.color ?? 'var(--muted)';
               const ok = m.result.success;
+              const action = (m.task.action || 'execute').replace(/_/g, ' ');
+              const detail = payloadDetail(m.task.payload);
               return (
                 <div
                   key={m.task.id}
@@ -470,7 +521,14 @@ export default function MissionControl({
                     className="mc-replay-tag"
                     style={{ color, background: `${color}18`, border: `1px solid ${color}44` }}
                   >{a?.code ?? m.task.agent.slice(0, 2).toUpperCase()}</span>
-                  <span className="mc-replay-action">{short(m.task.action, 46)}</span>
+                  <span className="mc-replay-action" title={detail || action}>
+                    <span style={{ color: 'var(--text)', fontWeight: 600 }}>{action}</span>
+                    {detail && (
+                      <span style={{ color: 'var(--muted)', marginLeft: 6 }}>
+                        — {short(detail, 38)}
+                      </span>
+                    )}
+                  </span>
                   <span
                     className="mc-replay-status"
                     style={{ color: ok ? 'var(--success)' : 'var(--error)' }}

@@ -266,12 +266,26 @@ class InMemoryDatabase:
         return results
 
     def create_lead(self, lead: LeadModel) -> LeadModel:
-        # Match SupabaseDatabase upsert behavior: a lead with the same
-        # email replaces the existing row instead of producing a duplicate.
+        # Mirror SupabaseDatabase dedup rules:
+        #   1. Same email → same lead (refresh the existing row).
+        #   2. No email but same case-insensitive (full_name, company_name)
+        #      → same lead. Without this, agents that find a prospect with
+        #      no email on every run keep producing fresh duplicate rows.
+        def _norm(s: Optional[str]) -> str:
+            return (s or "").strip().lower()
+
         with self._lock:
             if lead.email:
                 for existing_id, existing in self.leads.items():
                     if existing.email and existing.email == lead.email:
+                        lead.id = existing_id
+                        break
+            else:
+                key = (_norm(lead.full_name), _norm(lead.company_name))
+                for existing_id, existing in self.leads.items():
+                    if existing.email:
+                        continue
+                    if (_norm(existing.full_name), _norm(existing.company_name)) == key:
                         lead.id = existing_id
                         break
             self.leads[lead.id] = lead
@@ -529,12 +543,31 @@ class SupabaseDatabase:
     def create_lead(self, lead: LeadModel) -> LeadModel:
         try:
             data = lead.model_dump(exclude_none=True)
-            # Upsert on email so re-discovering the same lead refreshes the
-            # row (e.g. updated score/role) instead of duplicating it. Leads
-            # without an email fall back to plain insert because the partial
-            # unique index in 0003 only covers email-bearing rows.
+            # Two dedup paths:
+            #   1. Email present → upsert on email (the existing
+            #      leads_email_uniq index from 0004 backs this).
+            #   2. No email → look up an existing row by case-insensitive
+            #      (full_name, company_name) and update it in place;
+            #      otherwise insert. Migration 0010 adds a partial unique
+            #      index that catches concurrent races.
+            #
+            # supabase-py upsert(on_conflict=...) only takes a single
+            # column name, so the email-less path is implemented as
+            # explicit select-then-update at the app layer.
             if data.get("email"):
                 self.client.table("leads").upsert(data, on_conflict="email").execute()
+                return lead
+
+            existing = self._find_lead_by_name(
+                full_name=lead.full_name,
+                company_name=lead.company_name,
+            )
+            if existing:
+                # Preserve the existing row id so downstream references
+                # (e.g. campaign membership, run memory) keep resolving.
+                lead.id = existing["id"]
+                update_data = {k: v for k, v in data.items() if k != "id"}
+                self.client.table("leads").update(update_data).eq("id", existing["id"]).execute()
             else:
                 self.client.table("leads").insert(data).execute()
             return lead
@@ -542,6 +575,45 @@ class SupabaseDatabase:
             logging.error(
                 "SupabaseDatabase.create_lead failed: %s", e, exc_info=True)
             raise
+
+    def _find_lead_by_name(self, full_name: str,
+                           company_name: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Locate an email-less lead matching (full_name, company_name).
+
+        Case-insensitive match; treats a missing company_name as the
+        empty string so leads without a company still dedupe by name.
+        Returns the raw row dict (just `id` is needed by callers) or
+        None if no match exists.
+        """
+        try:
+            # ilike accepts %/_ as wildcards — escape any literal occurrences
+            # in the user-supplied name/company so a lead like "Alex_Test"
+            # doesn't accidentally match "Alex9Test".
+            def _esc(s: str) -> str:
+                return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+            q = (
+                self.client.table("leads")
+                .select("id")
+                .is_("email", "null")
+                .ilike("full_name", _esc(full_name or ""))
+            )
+            if company_name:
+                q = q.ilike("company_name", _esc(company_name))
+            else:
+                q = q.is_("company_name", "null")
+            result = q.limit(1).execute()
+            rows = result.data or []
+            return rows[0] if rows else None
+        except Exception as e:
+            # A failure here means we'd insert a duplicate — log loudly
+            # but don't block the write (the partial unique index from
+            # 0010 is the last line of defense).
+            logging.warning(
+                "SupabaseDatabase._find_lead_by_name failed: %s",
+                e, exc_info=True,
+            )
+            return None
 
     def get_campaigns(self, limit: Optional[int] = None,
                       offset: int = 0) -> List[CampaignModel]:

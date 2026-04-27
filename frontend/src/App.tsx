@@ -240,6 +240,18 @@ function runStatusLabel(status: string): string {
   }
 }
 
+// Internal identifiers like "schedule_checkin_calls" → "Schedule Checkin Calls".
+// Leaves names that already contain spaces or capitalization untouched.
+function humanizeName(raw: string): string {
+  if (!raw) return '—';
+  if (/\s/.test(raw) || /[a-z][A-Z]/.test(raw)) return raw;
+  return raw
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('en-US', {
@@ -318,11 +330,21 @@ function AppShell({ userId }: { userId: string }) {
   const [triggerDraft, setTriggerDraft]     = useState({
     name: '',
     event_type: 'cron',
-    schedule_cron: '0 9 * * *',
+    schedule_cron: '',
     prompt_template: '',
     event_filter: '',
   });
   const [triggerSaving, setTriggerSaving]   = useState(false);
+
+  // Wrapper for setTriggerDraft that also dismisses any stale validation error.
+  const updateTriggerDraft = useCallback(
+    (updater: (d: typeof triggerDraft) => typeof triggerDraft) => {
+      setTriggerDraft(updater);
+      setTriggersError(null);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   // System health
   const [systemOnline, setSystemOnline] = useState(true);
@@ -482,7 +504,7 @@ function AppShell({ userId }: { userId: string }) {
       setTriggerDraft({
         name: '',
         event_type: 'cron',
-        schedule_cron: '0 9 * * *',
+        schedule_cron: '',
         prompt_template: '',
         event_filter: '',
       });
@@ -859,6 +881,21 @@ function AppShell({ userId }: { userId: string }) {
     });
   };
 
+  // ── Display leads: dedup by (name + email) and sort by score desc ──
+  // Multiple agent runs can produce the same prospect; dedup keeps the
+  // highest-scoring entry so the list is signal not noise.
+  const displayLeads = React.useMemo(() => {
+    const seen = new Map<string, Lead>();
+    for (const l of leads) {
+      const key = `${(l.full_name || '').trim().toLowerCase()}|${(l.email || '').trim().toLowerCase()}`;
+      const prev = seen.get(key);
+      if (!prev || (l.icp_score ?? 0) > (prev.icp_score ?? 0)) seen.set(key, l);
+    }
+    return Array.from(seen.values()).sort(
+      (a, b) => (b.icp_score ?? 0) - (a.icp_score ?? 0),
+    );
+  }, [leads]);
+
   // ── Sidebar stats ──────────────────────────────────────────────
   const avgScore = leads.length
     ? Math.round(leads.reduce((a, l) => a + (l.icp_score ?? 0), 0) / leads.length)
@@ -985,7 +1022,7 @@ function AppShell({ userId }: { userId: string }) {
               </div>
               <div className="sidebar-stat">
                 <span className="stat-label">COST</span>
-                <span className="stat-value">${response.total_cost.toFixed(4)}</span>
+                <span className="stat-value">${response.total_cost.toFixed(2)}</span>
               </div>
               <div className="sidebar-stat">
                 <span className="stat-label">RUN ID</span>
@@ -1054,16 +1091,8 @@ function AppShell({ userId }: { userId: string }) {
               <div className="sidebar-stat">
                 <span className="stat-label">TOTAL COST</span>
                 <span className="stat-value c-accent">
-                  ${runs.reduce((a, r) => a + (r.cost_usd ?? 0), 0).toFixed(4)}
+                  ${runs.reduce((a, r) => a + (r.cost_usd ?? 0), 0).toFixed(2)}
                 </span>
-              </div>
-              <div className="sidebar-stat">
-                <span className="stat-label">USER ID</span>
-                <span
-                  className="stat-value mono-xs stat-clickable"
-                  title={`Click to copy: ${userId}`}
-                  onClick={() => navigator.clipboard.writeText(userId)}
-                >{userId.slice(0, 14)}…</span>
               </div>
             </section>
           )}
@@ -1073,7 +1102,11 @@ function AppShell({ userId }: { userId: string }) {
               <p className="sidebar-title">PROFILE STATUS</p>
               <div className="sidebar-stat">
                 <span className="stat-label">COMPANY</span>
-                <span className="stat-value" style={{ color: profile.company_name ? 'var(--text)' : 'var(--muted)' }}>
+                <span
+                  className="stat-value"
+                  style={{ color: profile.company_name ? 'var(--text)' : 'var(--muted)' }}
+                  title={profile.company_name || ''}
+                >
                   {profile.company_name || '—'}
                 </span>
               </div>
@@ -1345,7 +1378,7 @@ function AppShell({ userId }: { userId: string }) {
               <div className="data-toolbar">
                 <div className="toolbar-left">
                   <span className="toolbar-title">LEAD DATABASE</span>
-                  <span className="toolbar-count">{leads.length} RECORDS</span>
+                  <span className="toolbar-count">{displayLeads.length} RECORDS</span>
                 </div>
                 <div className="toolbar-right">
                   <label className="filter-label">
@@ -1423,7 +1456,7 @@ function AppShell({ userId }: { userId: string }) {
                 </div>
               )}
 
-              {!leadsLoading && leads.length === 0 && !leadsError && (
+              {!leadsLoading && displayLeads.length === 0 && !leadsError && (
                 <div className="data-empty">
                   <Users size={28} style={{ color: 'var(--muted)', marginBottom: 12 }} />
                   <p>NO LEADS ON RECORD</p>
@@ -1431,9 +1464,9 @@ function AppShell({ userId }: { userId: string }) {
                 </div>
               )}
 
-              {!leadsLoading && leads.length > 0 && (
+              {!leadsLoading && displayLeads.length > 0 && (
                 <div className="data-table-wrap">
-                  <table className="data-table">
+                  <table className="data-table clickable-rows">
                     <thead>
                       <tr>
                         <th>#</th>
@@ -1445,7 +1478,7 @@ function AppShell({ userId }: { userId: string }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {leads.map((lead, i) => (
+                      {displayLeads.map((lead, i) => (
                         <tr
                           key={lead.id}
                           onClick={() => setSelectedLead(lead)}
@@ -1535,7 +1568,12 @@ function AppShell({ userId }: { userId: string }) {
                       <div style={{ color: 'var(--muted)' }}>SOURCE</div>
                       <div>{selectedLead.source}</div>
                       <div style={{ color: 'var(--muted)' }}>CREATED</div>
-                      <div>{selectedLead.created_at ?? '—'}</div>
+                      <div>{selectedLead.created_at
+                        ? new Date(selectedLead.created_at).toLocaleString('en-US', {
+                            month: 'short', day: '2-digit', year: 'numeric',
+                            hour: 'numeric', minute: '2-digit',
+                          })
+                        : '—'}</div>
                       {selectedLead.qualification_rationale && (
                         <>
                           <div style={{ color: 'var(--muted)' }}>RATIONALE</div>
@@ -1630,7 +1668,7 @@ function AppShell({ userId }: { userId: string }) {
                       {campaigns.map((c, i) => (
                         <tr key={c.id}>
                           <td className="td-muted">{String(i + 1).padStart(2, '0')}</td>
-                          <td className="td-name">{c.name}</td>
+                          <td className="td-name" title={c.name}>{humanizeName(c.name)}</td>
                           <td>
                             <span className="status-badge"
                               style={{ color: statusColor(c.status), borderColor: statusColor(c.status) + '44', backgroundColor: statusColor(c.status) + '12' }}>
@@ -1677,15 +1715,15 @@ function AppShell({ userId }: { userId: string }) {
                     className="text-input"
                     placeholder="Name (e.g. Daily HVAC prospects)"
                     value={triggerDraft.name}
-                    onChange={e => setTriggerDraft(d => ({ ...d, name: e.target.value }))}
+                    onChange={e => updateTriggerDraft(d => ({ ...d, name: e.target.value }))}
                   />
                   <select
                     className="text-input"
                     value={triggerDraft.event_type}
-                    onChange={e => setTriggerDraft(d => ({ ...d, event_type: e.target.value }))}
+                    onChange={e => updateTriggerDraft(d => ({ ...d, event_type: e.target.value }))}
                   >
                     <option value="cron">CRON (schedule)</option>
-                    <option value="webhook">WEBHOOK (external POST)</option>
+                    <option value="webhook">WEBHOOK</option>
                     <option value="lead.created">EVENT: lead.created</option>
                     <option value="run.completed">EVENT: run.completed</option>
                   </select>
@@ -1693,9 +1731,9 @@ function AppShell({ userId }: { userId: string }) {
                 {triggerDraft.event_type === 'cron' && (
                   <input
                     className="text-input"
-                    placeholder="Cron (m h dom mon dow), e.g. '0 9 * * *' = 9am daily"
+                    placeholder="m h dom mon dow — e.g. 0 9 * * * (9am daily)"
                     value={triggerDraft.schedule_cron}
-                    onChange={e => setTriggerDraft(d => ({ ...d, schedule_cron: e.target.value }))}
+                    onChange={e => updateTriggerDraft(d => ({ ...d, schedule_cron: e.target.value }))}
                     style={{ width: '100%', marginBottom: 10 }}
                   />
                 )}
@@ -1704,7 +1742,7 @@ function AppShell({ userId }: { userId: string }) {
                     className="text-input"
                     placeholder='Optional filter JSON, e.g. {"min_icp_score": 70}'
                     value={triggerDraft.event_filter}
-                    onChange={e => setTriggerDraft(d => ({ ...d, event_filter: e.target.value }))}
+                    onChange={e => updateTriggerDraft(d => ({ ...d, event_filter: e.target.value }))}
                     style={{ width: '100%', marginBottom: 10 }}
                   />
                 )}
@@ -1719,9 +1757,14 @@ function AppShell({ userId }: { userId: string }) {
                   }
                   rows={3}
                   value={triggerDraft.prompt_template}
-                  onChange={e => setTriggerDraft(d => ({ ...d, prompt_template: e.target.value }))}
+                  onChange={e => updateTriggerDraft(d => ({ ...d, prompt_template: e.target.value }))}
                   style={{ width: '100%', resize: 'vertical', marginBottom: 10 }}
                 />
+                {triggersError && (
+                  <div className="error-box" style={{ margin: '0 0 10px' }}>
+                    <strong>ERR:</strong> {triggersError}
+                  </div>
+                )}
                 <button
                   type="button"
                   className="toolbar-btn"
@@ -1731,8 +1774,6 @@ function AppShell({ userId }: { userId: string }) {
                   <Save size={11} /> {triggerSaving ? 'SAVING…' : 'CREATE TRIGGER'}
                 </button>
               </div>
-
-              {triggersError && <div className="error-box" style={{ margin: '0 0 12px' }}><strong>ERR:</strong> {triggersError}</div>}
 
               {triggersLoading && (
                 <div className="data-loading"><span className="blink">█</span> LOADING TRIGGERS…</div>
@@ -1894,7 +1935,7 @@ function AppShell({ userId }: { userId: string }) {
                             </span>
                           </td>
                           <td style={{ color: 'var(--accent)' }}>
-                            {run.cost_usd != null ? `$${run.cost_usd.toFixed(4)}` : '—'}
+                            {run.cost_usd != null ? `$${run.cost_usd.toFixed(2)}` : '—'}
                           </td>
                           <td className="td-muted">
                             {run.started_at ? new Date(run.started_at).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : '—'}
