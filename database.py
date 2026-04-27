@@ -539,6 +539,40 @@ def get_database() -> DatabaseProvider:
 # UTILITIES
 # ============================================================
 
+def extract_campaigns_from_memory(memory: List[Dict[str, Any]]) -> List[CampaignModel]:
+    """
+    Parse execution memory and extract one CampaignModel per detected campaign.
+
+    Trigger: any memory entry whose tool result is a run_workflow output
+    (recognized by the {workflow, status, steps_executed, ...} shape returned
+    by run_workflow), OR whose result data carries an explicit campaign_name.
+
+    Dedupes by name so a single mission with multiple workflow steps
+    surfaces as one campaign row.
+    """
+    seen: set[str] = set()
+    campaigns: List[CampaignModel] = []
+    for entry in memory:
+        data = entry.get("result", {}).get("data")
+        if not isinstance(data, dict):
+            continue
+
+        name = data.get("campaign_name") or data.get("workflow")
+        if not isinstance(name, str) or not name.strip():
+            continue
+
+        normalized = name.strip()
+        if normalized.lower() in seen:
+            continue
+        seen.add(normalized.lower())
+
+        raw_status = data.get("campaign_status") or data.get("status") or "completed"
+        status = raw_status if raw_status in {"draft", "active", "paused", "completed", "archived"} else "completed"
+
+        campaigns.append(CampaignModel(name=normalized, status=status))
+    return campaigns
+
+
 def extract_leads_from_memory(memory: List[Dict[str, Any]]) -> List[LeadModel]:
     """
     Parse execution memory entries and extract any discovered leads.

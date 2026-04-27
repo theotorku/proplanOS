@@ -40,7 +40,15 @@ from proplanOrchestrator import (
     FindLeadsSchema, GenerateCopySchema, SearchKnowledgeBaseSchema,
     ScheduleTaskSchema, RunWorkflowSchema
 )
-from database import get_database, LeadModel, CampaignModel, AgentSessionModel, BusinessProfileModel, extract_leads_from_memory
+from database import (
+    get_database,
+    LeadModel,
+    CampaignModel,
+    AgentSessionModel,
+    BusinessProfileModel,
+    extract_leads_from_memory,
+    extract_campaigns_from_memory,
+)
 from llm import AnthropicPlannerProvider, AnthropicAgentProvider
 from chat_routes import router as chat_router
 
@@ -148,6 +156,8 @@ def _run_orchestrator_bg(run_id: str, request: str, business_context: Optional[s
     persistence_errors: List[Dict[str, Any]] = []
     leads_extracted = 0
     leads_saved = 0
+    campaigns_extracted = 0
+    campaigns_saved = 0
 
     try:
         orchestrator = create_orchestrator()
@@ -171,6 +181,24 @@ def _run_orchestrator_bg(run_id: str, request: str, business_context: Optional[s
                     "message": str(e),
                 })
 
+        extracted_campaigns = extract_campaigns_from_memory(result.get("memory", []))
+        campaigns_extracted = len(extracted_campaigns)
+        for idx, campaign in enumerate(extracted_campaigns):
+            try:
+                db.create_campaign(campaign)
+                campaigns_saved += 1
+            except Exception as e:
+                logging.error(
+                    "Campaign persistence failed (run=%s campaign_idx=%d backend=%s): %s",
+                    run_id, idx, _db_backend_name(), e, exc_info=True,
+                )
+                persistence_errors.append({
+                    "target": "campaign",
+                    "index": idx,
+                    "error_type": type(e).__name__,
+                    "message": str(e),
+                })
+
         session_status = "completed" if result["status"] == "goal_met" else "failed"
         final = {
             "status": result["status"],
@@ -183,6 +211,8 @@ def _run_orchestrator_bg(run_id: str, request: str, business_context: Optional[s
                 "backend": _db_backend_name(),
                 "leads_extracted": leads_extracted,
                 "leads_saved": leads_saved,
+                "campaigns_extracted": campaigns_extracted,
+                "campaigns_saved": campaigns_saved,
                 "session_logged": True,
                 "errors": persistence_errors,
             },

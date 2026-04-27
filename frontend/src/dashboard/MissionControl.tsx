@@ -134,17 +134,26 @@ export default function MissionControl({
   const topBand = scoreBand(topScore);
   const topBandC = bandColor(topBand);
 
-  // ── Agent fleet — pull cost/runs from memory ───────────
+  // ── Agent fleet — walk each run's memory, attribute by task.agent ──
+  // cost_breakdown is keyed by task.id, memory entries carry task.agent —
+  // joining the two lets us tally runs and spend per agent registry key
+  // ('sales' / 'marketing' / 'support' / 'ops') which is what the cards expect.
   const agentStats = useMemo(() => {
     const agg: Record<string, { runs: number; cost: number }> = {};
     for (const r of runs) {
-      const breakdown = (r.output_data as unknown as { cost_breakdown?: Record<string, number> })?.cost_breakdown;
-      if (breakdown) {
-        for (const [k, v] of Object.entries(breakdown)) {
-          agg[k] = agg[k] ?? { runs: 0, cost: 0 };
-          agg[k].runs += 1;
-          agg[k].cost += v;
-        }
+      const out = r.output_data as unknown as {
+        memory?: TaskMemory[];
+        cost_breakdown?: Record<string, number>;
+      } | null;
+      const memory = out?.memory ?? [];
+      const breakdown = out?.cost_breakdown ?? {};
+      for (const entry of memory) {
+        const agent = entry?.task?.agent;
+        if (!agent) continue;
+        const cost = breakdown[entry.task.id] ?? 0;
+        agg[agent] = agg[agent] ?? { runs: 0, cost: 0 };
+        agg[agent].runs += 1;
+        agg[agent].cost += cost;
       }
     }
     return agg;
