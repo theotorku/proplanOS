@@ -119,7 +119,7 @@ class Goal:
 
     description: str
     success_criteria: str = "all_success"  # "any_success" | "all_success"
-    max_steps: int = 5
+    max_steps: int = 10
     max_failures: int = 3
 
 
