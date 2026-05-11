@@ -1416,7 +1416,7 @@ function AppShell({ userId }: { userId: string }) {
                     title={
                       leads.length === 0
                         ? 'No leads to send'
-                        : 'Post the top 10 leads in this view to your Slack channel'
+                        : 'Post the top 10 highest-scoring leads to Slack (server re-fetches by score, independent of current filter)'
                     }
                   >
                     <MessageSquare size={11} />
@@ -1471,10 +1471,12 @@ function AppShell({ userId }: { userId: string }) {
                       <tr>
                         <th>#</th>
                         <th>NAME</th>
+                        <th>COMPANY</th>
+                        <th>ROLE</th>
+                        <th>EMAIL</th>
                         <th>SCORE</th>
                         <th>FIT</th>
                         <th>SOURCE</th>
-                        <th>ID</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1487,6 +1489,9 @@ function AppShell({ userId }: { userId: string }) {
                         >
                           <td className="td-muted">{String(i + 1).padStart(2, '0')}</td>
                           <td className="td-name">{lead.full_name}</td>
+                          <td className="td-muted">{lead.company_name ?? '—'}</td>
+                          <td className="td-muted">{lead.role ?? '—'}</td>
+                          <td className="td-muted">{lead.email ?? '—'}</td>
                           <td>
                             <div className="score-cell">
                               <span className="score-num" style={{ color: scoreColor(lead.icp_score ?? 0) }}>
@@ -1507,7 +1512,6 @@ function AppShell({ userId }: { userId: string }) {
                           <td>
                             <span className="source-badge">{lead.source.toUpperCase()}</span>
                           </td>
-                          <td className="td-id">{lead.id.slice(0, 12)}…</td>
                         </tr>
                       ))}
                     </tbody>

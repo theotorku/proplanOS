@@ -21,14 +21,18 @@ from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional, Sequence
 import csv
 import io
+import ipaddress
 import json
+import re
 import secrets
+import socket
 import threading
 import uuid
 import time
 import os
 import logging
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 try:
     import httpx
@@ -193,7 +197,8 @@ def _run_orchestrator_bg(
                     },
                 )
             except Exception as upd_err:
-                logging.warning("progress update failed (run=%s): %s", run_id, upd_err)
+                logging.warning(
+                    "progress update failed (run=%s): %s", run_id, upd_err)
 
         result = orchestrator.run(
             request,
@@ -229,7 +234,8 @@ def _run_orchestrator_bg(
                     "message": str(e),
                 })
 
-        extracted_campaigns = extract_campaigns_from_memory(result.get("memory", []))
+        extracted_campaigns = extract_campaigns_from_memory(
+            result.get("memory", []))
         campaigns_extracted = len(extracted_campaigns)
         for idx, campaign in enumerate(extracted_campaigns):
             try:
@@ -306,7 +312,8 @@ def _run_orchestrator_bg(
                 completed_at=datetime.now(timezone.utc).isoformat(),
             )
         except Exception as inner:
-            logging.error("update_run_session (failure path) also failed for run=%s: %s", run_id, inner)
+            logging.error(
+                "update_run_session (failure path) also failed for run=%s: %s", run_id, inner)
 
 
 # -----------------------------
@@ -317,7 +324,8 @@ def create_orchestrator() -> Orchestrator:
     """Create and configure the orchestrator with default tools and agents."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
 
-    planner_llm = AnthropicPlannerProvider(api_key=api_key) if api_key else None
+    planner_llm = AnthropicPlannerProvider(
+        api_key=api_key) if api_key else None
     orchestrator = Orchestrator(
         security_policy=SecurityPolicy.allow_all(),
         planner_llm=planner_llm
@@ -457,7 +465,8 @@ def agent_run(body: AgentRunRequest, background_tasks: BackgroundTasks):
             started_at=datetime.now(timezone.utc).isoformat(),
         ))
     except Exception as e:
-        logging.error("create_run_session failed at dispatch (run=%s): %s", run_id, e, exc_info=True)
+        logging.error(
+            "create_run_session failed at dispatch (run=%s): %s", run_id, e, exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Could not dispatch run: {type(e).__name__}: {e}",
@@ -477,7 +486,8 @@ def agent_run(body: AgentRunRequest, background_tasks: BackgroundTasks):
                 run_id=run_id,
             ))
         except Exception as e:
-            logging.error("enqueue_job failed (run=%s): %s", run_id, e, exc_info=True)
+            logging.error("enqueue_job failed (run=%s): %s",
+                          run_id, e, exc_info=True)
             background_tasks.add_task(
                 _run_orchestrator_bg,
                 run_id, body.request, body.business_context, body.user_id,
@@ -499,7 +509,8 @@ def agent_run_status(run_id: str):
         raise HTTPException(status_code=404, detail="Run not found.")
 
     if session.status == "running":
-        progress = session.output_data if isinstance(session.output_data, dict) else None
+        progress = session.output_data if isinstance(
+            session.output_data, dict) else None
         return {"status": "running", "progress": progress}
     if session.status == "completed":
         return {"status": "completed", "result": session.output_data}
@@ -553,15 +564,24 @@ def _profile_to_context(profile: Optional[BusinessProfileModel]) -> Optional[str
     if not profile or not (profile.company_name or profile.what_we_do or profile.icp):
         return None
     lines: List[str] = []
-    if profile.company_name:      lines.append(f"Company: {profile.company_name}")
-    if profile.what_we_do:        lines.append(f"What we do: {profile.what_we_do}")
-    if profile.icp:               lines.append(f"Ideal Customer Profile: {profile.icp}")
-    if profile.target_industries: lines.append(f"Target industries: {profile.target_industries}")
-    if profile.company_size:      lines.append(f"Target company size: {profile.company_size}")
-    if profile.geography:         lines.append(f"Geography: {profile.geography}")
-    if profile.lead_signals:      lines.append(f"Lead qualification signals: {profile.lead_signals}")
-    if profile.value_proposition: lines.append(f"Value proposition: {profile.value_proposition}")
-    if profile.tone:              lines.append(f"Communication tone: {profile.tone}")
+    if profile.company_name:
+        lines.append(f"Company: {profile.company_name}")
+    if profile.what_we_do:
+        lines.append(f"What we do: {profile.what_we_do}")
+    if profile.icp:
+        lines.append(f"Ideal Customer Profile: {profile.icp}")
+    if profile.target_industries:
+        lines.append(f"Target industries: {profile.target_industries}")
+    if profile.company_size:
+        lines.append(f"Target company size: {profile.company_size}")
+    if profile.geography:
+        lines.append(f"Geography: {profile.geography}")
+    if profile.lead_signals:
+        lines.append(f"Lead qualification signals: {profile.lead_signals}")
+    if profile.value_proposition:
+        lines.append(f"Value proposition: {profile.value_proposition}")
+    if profile.tone:
+        lines.append(f"Communication tone: {profile.tone}")
     return "\n".join(lines)
 
 
@@ -631,20 +651,24 @@ def _fire_trigger(trigger: TriggerModel, context: Optional[Dict[str, Any]] = Non
     except Exception as e:
         audit_status = "failed"
         audit_error = f"{type(e).__name__}: {e}"
-        logging.error("Trigger dispatch failed (id=%s): %s", trigger.id, e, exc_info=True)
+        logging.error("Trigger dispatch failed (id=%s): %s",
+                      trigger.id, e, exc_info=True)
 
     now_iso = datetime.now(timezone.utc).isoformat()
     update_fields: Dict[str, Any] = {"last_run_at": now_iso}
     # Cron triggers advance their schedule; event/webhook triggers don't have one.
     if trigger.event_type == "cron" and trigger.schedule_cron:
         try:
-            update_fields["next_run_at"] = compute_next_run(trigger.schedule_cron)
+            update_fields["next_run_at"] = compute_next_run(
+                trigger.schedule_cron)
         except Exception as e:
-            logging.warning("compute_next_run failed for trigger %s: %s", trigger.id, e)
+            logging.warning(
+                "compute_next_run failed for trigger %s: %s", trigger.id, e)
     try:
         db.update_trigger(trigger.id, **update_fields)
     except Exception as e:
-        logging.error("Trigger update_trigger failed (id=%s): %s", trigger.id, e)
+        logging.error(
+            "Trigger update_trigger failed (id=%s): %s", trigger.id, e)
 
     try:
         db.create_trigger_run(TriggerRunModel(
@@ -751,7 +775,8 @@ def create_trigger(body: TriggerCreate):
 
     if body.event_type == "cron":
         if not body.schedule_cron:
-            raise HTTPException(status_code=400, detail="schedule_cron required for cron triggers.")
+            raise HTTPException(
+                status_code=400, detail="schedule_cron required for cron triggers.")
         try:
             validate_cron(body.schedule_cron)
         except ValueError as e:
@@ -882,8 +907,39 @@ _ONBOARD_PREFILL: Dict[str, Dict[str, Any]] = {
 }
 
 
+_SSRF_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local / AWS metadata
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def _is_ssrf_blocked(hostname: str) -> bool:
+    """Return True if the hostname resolves to a private/internal address."""
+    if hostname.lower() in ("localhost", "metadata.google.internal"):
+        return True
+    try:
+        # Resolve all addresses and check each one.
+        infos = socket.getaddrinfo(hostname, None)
+        for info in infos:
+            addr_str = info[4][0]
+            addr = ipaddress.ip_address(addr_str)
+            if any(addr in net for net in _SSRF_BLOCKED_NETWORKS):
+                return True
+    except Exception:
+        # If resolution fails, block as a safety measure.
+        return True
+    return False
+
+
 def _normalize_url(raw: str) -> tuple[str, str]:
-    """Return (display_url, domain) for a user-supplied site URL."""
+    """Return (display_url, domain) for a user-supplied site URL.
+    Raises HTTPException 400 if the host resolves to a private/internal address."""
     s = (raw or "").strip()
     if not s:
         return ("", "")
@@ -891,12 +947,19 @@ def _normalize_url(raw: str) -> tuple[str, str]:
     if not s.lower().startswith(("http://", "https://")):
         s = "https://" + s
     try:
-        from urllib.parse import urlparse
         parsed = urlparse(s)
+        hostname = (parsed.hostname or "").lower()
         domain = (parsed.netloc or "").lower()
         if domain.startswith("www."):
             domain = domain[4:]
+        if not hostname:
+            return ("", "")
+        if _is_ssrf_blocked(hostname):
+            raise HTTPException(
+                status_code=400, detail="URL host is not permitted.")
         return (s, domain)
+    except HTTPException:
+        raise
     except Exception:
         return (s, s)
 
@@ -939,12 +1002,12 @@ def _pick_review(reviews: Sequence[Dict[str, Any]]) -> Optional[OnboardReview]:
 def _fetch_site_title(url: str, client: "httpx.Client") -> Optional[str]:
     """Best-effort grab of the site <title> for a backup company name."""
     try:
-        resp = client.get(url, timeout=4.0, follow_redirects=True,
+        resp = client.get(url, timeout=4.0, follow_redirects=False,
                           headers={"User-Agent": "ProPlan-Onboarding/1.0"})
         if resp.status_code >= 400:
             return None
-        import re
-        m = re.search(r"<title[^>]*>(.*?)</title>", resp.text, re.IGNORECASE | re.DOTALL)
+        m = re.search(r"<title[^>]*>(.*?)</title>",
+                      resp.text, re.IGNORECASE | re.DOTALL)
         if not m:
             return None
         # Strip site suffixes like "… | Home" or "… - Official Site".
@@ -993,7 +1056,8 @@ def _google_places_lookup(query: str, api_key: str,
         return {}
 
 
-@app.post("/onboard/scan", response_model=OnboardScanResponse, tags=["Onboarding"])
+@app.post("/onboard/scan", response_model=OnboardScanResponse, tags=["Onboarding"],
+          dependencies=[Depends(verify_api_key)])
 def onboard_scan(body: OnboardScanRequest):
     """Scan a business URL. Returns any fields we could recover from the
     site title + Google Places. Missing fields come back null and the
@@ -1049,7 +1113,8 @@ def onboard_prefill(token: str):
     """Look up a pilot-customer pre-seed by token. 404 if unknown."""
     data = _ONBOARD_PREFILL.get(token)
     if data is None:
-        raise HTTPException(status_code=404, detail="Unknown onboarding token.")
+        raise HTTPException(
+            status_code=404, detail="Unknown onboarding token.")
     return OnboardPrefillResponse(token=token, **data)
 
 
@@ -1139,7 +1204,8 @@ def _require_slack_webhook(user_id: str) -> str:
     """Load the webhook URL for a user, 400/404 with a clear message if missing."""
     profile = db.get_profile(user_id)
     if not profile:
-        raise HTTPException(status_code=404, detail="Profile not found. Save your profile first.")
+        raise HTTPException(
+            status_code=404, detail="Profile not found. Save your profile first.")
     url = (profile.slack_webhook_url or "").strip()
     if not url:
         raise HTTPException(
@@ -1165,7 +1231,8 @@ def _post_to_slack(webhook_url: str, text: str) -> None:
     try:
         resp = httpx.post(webhook_url, json={"text": text}, timeout=10.0)
     except httpx.HTTPError as e:
-        raise HTTPException(status_code=502, detail=f"Could not reach Slack: {e}") from e
+        raise HTTPException(
+            status_code=502, detail=f"Could not reach Slack: {e}") from e
     if resp.status_code >= 300:
         # Slack returns a short diagnostic string on error (e.g. "invalid_token", "no_service").
         raise HTTPException(
@@ -1188,7 +1255,8 @@ def _format_lead_digest(rows: List[LeadModel], min_score: Optional[float]) -> st
         score = f"{lead.icp_score:.0f}" if lead.icp_score is not None else "—"
         company = lead.company_name or "Unknown"
         role = f" · {lead.role}" if lead.role else ""
-        lines.append(f"{i}. {lead.full_name} — {company}{role} — Score {score}")
+        lines.append(
+            f"{i}. {lead.full_name} — {company}{role} — Score {score}")
     return "\n".join(lines)
 
 
@@ -1197,7 +1265,8 @@ def _format_lead_digest(rows: List[LeadModel], min_score: Optional[float]) -> st
 def slack_test(user_id: str):
     """Send a short ping to the configured Slack webhook — use this to verify setup."""
     url = _require_slack_webhook(user_id)
-    _post_to_slack(url, ":satellite_antenna: ProPlan connection test — if you see this, your Slack integration is working.")
+    _post_to_slack(
+        url, ":satellite_antenna: ProPlan connection test — if you see this, your Slack integration is working.")
     return {"status": "sent"}
 
 
@@ -1206,7 +1275,8 @@ def slack_test(user_id: str):
 def slack_send_leads(
     user_id: str,
     min_score: Optional[float] = Query(None, ge=0, le=100),
-    limit: int = Query(10, ge=1, le=50, description="Max leads to include in the digest"),
+    limit: int = Query(
+        10, ge=1, le=50, description="Max leads to include in the digest"),
 ):
     """Post a formatted top-N lead digest to the user's Slack webhook."""
     url = _require_slack_webhook(user_id)

@@ -188,50 +188,82 @@ class DatabaseProvider(Protocol):
     # Leads
     def get_leads(self, min_score: Optional[float] = None,
                   limit: Optional[int] = None, offset: int = 0) -> List[LeadModel]: ...
+
     def create_lead(self, lead: LeadModel) -> LeadModel: ...
 
     # Campaigns
     def get_campaigns(self, limit: Optional[int] = None,
                       offset: int = 0) -> List[CampaignModel]: ...
+
     def create_campaign(self, campaign: CampaignModel) -> CampaignModel: ...
 
     # Agent Sessions (run logging)
-    def log_run(self, session: AgentSessionModel) -> None: ...
-    def create_run_session(self, session: AgentSessionModel) -> AgentSessionModel: ...
+    def create_run_session(
+        self, session: AgentSessionModel) -> AgentSessionModel: ...
+
     def update_run_session(self, run_id: str, **fields: Any) -> None: ...
-    def get_run_by_run_id(self, run_id: str) -> Optional[AgentSessionModel]: ...
-    def get_runs(self, user_id: str, limit: int = 20) -> List[AgentSessionModel]: ...
+
+    def get_run_by_run_id(
+        self, run_id: str) -> Optional[AgentSessionModel]: ...
+
+    def get_runs(self, user_id: str,
+                 limit: int = 20) -> List[AgentSessionModel]: ...
 
     # Business Profiles
-    def get_profile(self, user_id: str) -> Optional["BusinessProfileModel"]: ...
-    def upsert_profile(self, profile: "BusinessProfileModel") -> "BusinessProfileModel": ...
+    def get_profile(
+        self, user_id: str) -> Optional["BusinessProfileModel"]: ...
+
+    def upsert_profile(
+        self, profile: "BusinessProfileModel") -> "BusinessProfileModel": ...
 
     # Chat
-    def create_chat_conversation(self, convo: ChatConversationModel) -> ChatConversationModel: ...
-    def get_chat_conversation(self, convo_id: str) -> Optional[ChatConversationModel]: ...
-    def update_chat_conversation(self, convo_id: str, **fields: Any) -> None: ...
-    def create_chat_message(self, msg: ChatMessageModel) -> ChatMessageModel: ...
+    def create_chat_conversation(
+        self, convo: ChatConversationModel) -> ChatConversationModel: ...
+
+    def get_chat_conversation(
+        self, convo_id: str) -> Optional[ChatConversationModel]: ...
+
+    def update_chat_conversation(
+        self, convo_id: str, **fields: Any) -> None: ...
+    def create_chat_message(
+        self, msg: ChatMessageModel) -> ChatMessageModel: ...
+
     def get_chat_messages(self, convo_id: str) -> List[ChatMessageModel]: ...
-    def count_recent_conversations_by_ip(self, ip: str, since_iso: str) -> int: ...
+    def count_recent_conversations_by_ip(
+        self, ip: str, since_iso: str) -> int: ...
 
     # Triggers
     def list_triggers(self, user_id: str) -> List["TriggerModel"]: ...
     def get_trigger(self, trigger_id: str) -> Optional["TriggerModel"]: ...
     def create_trigger(self, trigger: "TriggerModel") -> "TriggerModel": ...
-    def update_trigger(self, trigger_id: str, **fields: Any) -> Optional["TriggerModel"]: ...
+    def update_trigger(self, trigger_id: str, **
+                       fields: Any) -> Optional["TriggerModel"]: ...
+
     def delete_trigger(self, trigger_id: str) -> bool: ...
     def get_due_triggers(self, now_iso: str) -> List["TriggerModel"]: ...
-    def get_trigger_by_webhook_token(self, token: str) -> Optional["TriggerModel"]: ...
-    def list_triggers_by_event(self, event_type: str) -> List["TriggerModel"]: ...
-    def create_trigger_run(self, run: "TriggerRunModel") -> "TriggerRunModel": ...
-    def list_trigger_runs(self, trigger_id: str, limit: int = 20) -> List["TriggerRunModel"]: ...
+
+    def get_trigger_by_webhook_token(
+        self, token: str) -> Optional["TriggerModel"]: ...
+
+    def list_triggers_by_event(
+        self, event_type: str) -> List["TriggerModel"]: ...
+
+    def create_trigger_run(
+        self, run: "TriggerRunModel") -> "TriggerRunModel": ...
+    def list_trigger_runs(self, trigger_id: str,
+                          limit: int = 20) -> List["TriggerRunModel"]: ...
 
     # Jobs (durable queue)
     def enqueue_job(self, job: "JobModel") -> "JobModel": ...
-    def claim_jobs(self, worker_id: str, limit: int = 5, stale_seconds: int = 600) -> List["JobModel"]: ...
+    def claim_jobs(self, worker_id: str, limit: int = 5,
+                   stale_seconds: int = 600) -> List["JobModel"]: ...
+
     def mark_job_done(self, job_id: str) -> None: ...
-    def mark_job_failed(self, job_id: str, error: str, retry: bool = True, backoff_seconds: int = 60) -> None: ...
-    def list_jobs(self, status: Optional[str] = None, limit: int = 50) -> List["JobModel"]: ...
+
+    def mark_job_failed(self, job_id: str, error: str,
+                        retry: bool = True, backoff_seconds: int = 60) -> None: ...
+    def list_jobs(
+        self, status: Optional[str] = None, limit: int = 50) -> List["JobModel"]: ...
 
 
 # ============================================================
@@ -305,10 +337,6 @@ class InMemoryDatabase:
             self.campaigns[campaign.id] = campaign
         return campaign
 
-    def log_run(self, session: AgentSessionModel) -> None:
-        with self._lock:
-            self.sessions.append(session)
-
     def create_run_session(self, session: AgentSessionModel) -> AgentSessionModel:
         with self._lock:
             self.sessions.append(session)
@@ -340,7 +368,8 @@ class InMemoryDatabase:
 
     def get_runs(self, user_id: str, limit: int = 20) -> List[AgentSessionModel]:
         with self._lock:
-            runs = [s for s in self.sessions if s.user_id == user_id and s.agent_type == "orchestrator"]
+            runs = [s for s in self.sessions if s.user_id ==
+                    user_id and s.agent_type == "orchestrator"]
         return list(reversed(runs))[:limit]
 
     # ---- Chat ----
@@ -461,7 +490,8 @@ class InMemoryDatabase:
                     candidates.append(j)
                 elif j.status == "claimed" and j.claimed_at:
                     try:
-                        age = (now_dt - datetime.fromisoformat(j.claimed_at)).total_seconds()
+                        age = (
+                            now_dt - datetime.fromisoformat(j.claimed_at)).total_seconds()
                         if age >= stale_seconds:
                             candidates.append(j)
                     except Exception:
@@ -493,8 +523,10 @@ class InMemoryDatabase:
             j.updated_at = datetime.now(timezone.utc).isoformat()
             if retry and j.attempts < j.max_attempts:
                 j.status = "queued"
-                next_dt = datetime.now(timezone.utc).timestamp() + backoff_seconds
-                j.scheduled_for = datetime.fromtimestamp(next_dt, tz=timezone.utc).isoformat()
+                next_dt = datetime.now(
+                    timezone.utc).timestamp() + backoff_seconds
+                j.scheduled_for = datetime.fromtimestamp(
+                    next_dt, tz=timezone.utc).isoformat()
                 j.claimed_at = None
                 j.claimed_by = None
             else:
@@ -555,7 +587,8 @@ class SupabaseDatabase:
             # column name, so the email-less path is implemented as
             # explicit select-then-update at the app layer.
             if data.get("email"):
-                self.client.table("leads").upsert(data, on_conflict="email").execute()
+                self.client.table("leads").upsert(
+                    data, on_conflict="email").execute()
                 return lead
 
             existing = self._find_lead_by_name(
@@ -567,7 +600,8 @@ class SupabaseDatabase:
                 # (e.g. campaign membership, run memory) keep resolving.
                 lead.id = existing["id"]
                 update_data = {k: v for k, v in data.items() if k != "id"}
-                self.client.table("leads").update(update_data).eq("id", existing["id"]).execute()
+                self.client.table("leads").update(update_data).eq(
+                    "id", existing["id"]).execute()
             else:
                 self.client.table("leads").insert(data).execute()
             return lead
@@ -638,28 +672,26 @@ class SupabaseDatabase:
                 "SupabaseDatabase.create_campaign failed: %s", e, exc_info=True)
             raise
 
-    def log_run(self, session: AgentSessionModel) -> None:
-        try:
-            data = session.model_dump(exclude_none=True)
-            self.client.table("agent_sessions").insert(data).execute()
-        except Exception as e:
-            logging.error("SupabaseDatabase.log_run failed: %s", e, exc_info=True)
-            raise
-
     def create_run_session(self, session: AgentSessionModel) -> AgentSessionModel:
         try:
             data = session.model_dump(exclude_none=True)
             self.client.table("agent_sessions").insert(data).execute()
             return session
         except Exception as e:
-            logging.error("SupabaseDatabase.create_run_session failed: %s", e, exc_info=True)
+            logging.error(
+                "SupabaseDatabase.create_run_session failed: %s", e, exc_info=True)
             raise
 
     def update_run_session(self, run_id: str, **fields: Any) -> None:
         try:
-            self.client.table("agent_sessions").update(fields).eq("run_id", run_id).execute()
+            # Serialise to JSON and back to coerce any non-primitive values
+            # (datetimes, enums, nested models) to types Supabase accepts.
+            safe_fields = json.loads(json.dumps(fields, default=str))
+            self.client.table("agent_sessions").update(
+                safe_fields).eq("run_id", run_id).execute()
         except Exception as e:
-            logging.error("SupabaseDatabase.update_run_session failed: %s", e, exc_info=True)
+            logging.error(
+                "SupabaseDatabase.update_run_session failed: %s", e, exc_info=True)
             raise
 
     def get_run_by_run_id(self, run_id: str) -> Optional[AgentSessionModel]:
@@ -678,7 +710,8 @@ class SupabaseDatabase:
 
     def get_profile(self, user_id: str) -> Optional["BusinessProfileModel"]:
         try:
-            result = self.client.table("business_profiles").select("*").eq("user_id", user_id).limit(1).execute()
+            result = self.client.table("business_profiles").select(
+                "*").eq("user_id", user_id).limit(1).execute()
             return BusinessProfileModel(**result.data[0]) if result.data else None
         except Exception as e:
             logging.warning("SupabaseDatabase.get_profile failed: %s", e)
@@ -691,7 +724,8 @@ class SupabaseDatabase:
             # retained old values, which made slack_webhook_url (and any
             # other nullable string) impossible to clear once saved.
             raw = profile.model_dump()
-            data = {k: (None if isinstance(v, str) and v == "" else v) for k, v in raw.items()}
+            data = {k: (None if isinstance(v, str) and v == "" else v)
+                    for k, v in raw.items()}
             # Don't send created_at=None on first insert — the column is NOT NULL
             # with a default. Letting the DB default populate it preserves the
             # original value on subsequent upserts (Postgres only overwrites
@@ -699,10 +733,12 @@ class SupabaseDatabase:
             if data.get("created_at") is None:
                 data.pop("created_at", None)
             data["updated_at"] = datetime.now(timezone.utc).isoformat()
-            self.client.table("business_profiles").upsert(data, on_conflict="user_id").execute()
+            self.client.table("business_profiles").upsert(
+                data, on_conflict="user_id").execute()
             return profile
         except Exception as e:
-            logging.error("SupabaseDatabase.upsert_profile failed: %s", e, exc_info=True)
+            logging.error(
+                "SupabaseDatabase.upsert_profile failed: %s", e, exc_info=True)
             raise
 
     def get_runs(self, user_id: str, limit: int = 20) -> List[AgentSessionModel]:
@@ -728,7 +764,8 @@ class SupabaseDatabase:
             self.client.table("chat_conversations").insert(data).execute()
             return convo
         except Exception as e:
-            logging.error("SupabaseDatabase.create_chat_conversation failed: %s", e, exc_info=True)
+            logging.error(
+                "SupabaseDatabase.create_chat_conversation failed: %s", e, exc_info=True)
             raise
 
     def get_chat_conversation(self, convo_id: str) -> Optional[ChatConversationModel]:
@@ -742,14 +779,17 @@ class SupabaseDatabase:
             )
             return ChatConversationModel(**result.data[0]) if result.data else None
         except Exception as e:
-            logging.warning("SupabaseDatabase.get_chat_conversation failed: %s", e)
+            logging.warning(
+                "SupabaseDatabase.get_chat_conversation failed: %s", e)
             return None
 
     def update_chat_conversation(self, convo_id: str, **fields: Any) -> None:
         try:
-            self.client.table("chat_conversations").update(fields).eq("id", convo_id).execute()
+            self.client.table("chat_conversations").update(
+                fields).eq("id", convo_id).execute()
         except Exception as e:
-            logging.error("SupabaseDatabase.update_chat_conversation failed: %s", e, exc_info=True)
+            logging.error(
+                "SupabaseDatabase.update_chat_conversation failed: %s", e, exc_info=True)
             raise
 
     def create_chat_message(self, msg: ChatMessageModel) -> ChatMessageModel:
@@ -758,7 +798,8 @@ class SupabaseDatabase:
             self.client.table("chat_messages").insert(data).execute()
             return msg
         except Exception as e:
-            logging.error("SupabaseDatabase.create_chat_message failed: %s", e, exc_info=True)
+            logging.error(
+                "SupabaseDatabase.create_chat_message failed: %s", e, exc_info=True)
             raise
 
     def get_chat_messages(self, convo_id: str) -> List[ChatMessageModel]:
@@ -786,7 +827,8 @@ class SupabaseDatabase:
             )
             return int(result.count or 0)
         except Exception as e:
-            logging.warning("SupabaseDatabase.count_recent_conversations_by_ip failed: %s", e)
+            logging.warning(
+                "SupabaseDatabase.count_recent_conversations_by_ip failed: %s", e)
             return 0
 
     # ---- Triggers ----
@@ -801,12 +843,14 @@ class SupabaseDatabase:
             )
             return [TriggerModel(**row) for row in result.data]
         except Exception as e:
-            logging.error("SupabaseDatabase.list_triggers failed: %s", e, exc_info=True)
+            logging.error(
+                "SupabaseDatabase.list_triggers failed: %s", e, exc_info=True)
             raise
 
     def get_trigger(self, trigger_id: str) -> Optional[TriggerModel]:
         try:
-            result = self.client.table("triggers").select("*").eq("id", trigger_id).limit(1).execute()
+            result = self.client.table("triggers").select(
+                "*").eq("id", trigger_id).limit(1).execute()
             return TriggerModel(**result.data[0]) if result.data else None
         except Exception as e:
             logging.warning("SupabaseDatabase.get_trigger failed: %s", e)
@@ -818,24 +862,29 @@ class SupabaseDatabase:
             self.client.table("triggers").insert(data).execute()
             return trigger
         except Exception as e:
-            logging.error("SupabaseDatabase.create_trigger failed: %s", e, exc_info=True)
+            logging.error(
+                "SupabaseDatabase.create_trigger failed: %s", e, exc_info=True)
             raise
 
     def update_trigger(self, trigger_id: str, **fields: Any) -> Optional[TriggerModel]:
         try:
             fields["updated_at"] = datetime.now(timezone.utc).isoformat()
-            self.client.table("triggers").update(fields).eq("id", trigger_id).execute()
+            self.client.table("triggers").update(
+                fields).eq("id", trigger_id).execute()
             return self.get_trigger(trigger_id)
         except Exception as e:
-            logging.error("SupabaseDatabase.update_trigger failed: %s", e, exc_info=True)
+            logging.error(
+                "SupabaseDatabase.update_trigger failed: %s", e, exc_info=True)
             raise
 
     def delete_trigger(self, trigger_id: str) -> bool:
         try:
-            self.client.table("triggers").delete().eq("id", trigger_id).execute()
+            self.client.table("triggers").delete().eq(
+                "id", trigger_id).execute()
             return True
         except Exception as e:
-            logging.error("SupabaseDatabase.delete_trigger failed: %s", e, exc_info=True)
+            logging.error(
+                "SupabaseDatabase.delete_trigger failed: %s", e, exc_info=True)
             return False
 
     def get_due_triggers(self, now_iso: str) -> List[TriggerModel]:
@@ -864,7 +913,8 @@ class SupabaseDatabase:
             )
             return TriggerModel(**result.data[0]) if result.data else None
         except Exception as e:
-            logging.warning("SupabaseDatabase.get_trigger_by_webhook_token failed: %s", e)
+            logging.warning(
+                "SupabaseDatabase.get_trigger_by_webhook_token failed: %s", e)
             return None
 
     def list_triggers_by_event(self, event_type: str) -> List[TriggerModel]:
@@ -878,7 +928,8 @@ class SupabaseDatabase:
             )
             return [TriggerModel(**row) for row in result.data]
         except Exception as e:
-            logging.warning("SupabaseDatabase.list_triggers_by_event failed: %s", e)
+            logging.warning(
+                "SupabaseDatabase.list_triggers_by_event failed: %s", e)
             return []
 
     def create_trigger_run(self, run: TriggerRunModel) -> TriggerRunModel:
@@ -887,7 +938,8 @@ class SupabaseDatabase:
             self.client.table("trigger_runs").insert(data).execute()
             return run
         except Exception as e:
-            logging.error("SupabaseDatabase.create_trigger_run failed: %s", e, exc_info=True)
+            logging.error(
+                "SupabaseDatabase.create_trigger_run failed: %s", e, exc_info=True)
             raise
 
     def list_trigger_runs(self, trigger_id: str, limit: int = 20) -> List[TriggerRunModel]:
@@ -912,7 +964,8 @@ class SupabaseDatabase:
             self.client.table("jobs").insert(data).execute()
             return job
         except Exception as e:
-            logging.error("SupabaseDatabase.enqueue_job failed: %s", e, exc_info=True)
+            logging.error(
+                "SupabaseDatabase.enqueue_job failed: %s", e, exc_info=True)
             raise
 
     def claim_jobs(self, worker_id: str, limit: int = 5, stale_seconds: int = 600) -> List[JobModel]:
@@ -934,11 +987,13 @@ class SupabaseDatabase:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", job_id).execute()
         except Exception as e:
-            logging.error("SupabaseDatabase.mark_job_done failed: %s", e, exc_info=True)
+            logging.error(
+                "SupabaseDatabase.mark_job_done failed: %s", e, exc_info=True)
 
     def mark_job_failed(self, job_id: str, error: str, retry: bool = True, backoff_seconds: int = 60) -> None:
         try:
-            row = self.client.table("jobs").select("*").eq("id", job_id).limit(1).execute()
+            row = self.client.table("jobs").select(
+                "*").eq("id", job_id).limit(1).execute()
             if not row.data:
                 return
             j = JobModel(**row.data[0])
@@ -963,14 +1018,16 @@ class SupabaseDatabase:
                     "updated_at": now_iso,
                 }).eq("id", job_id).execute()
         except Exception as e:
-            logging.error("SupabaseDatabase.mark_job_failed failed: %s", e, exc_info=True)
+            logging.error(
+                "SupabaseDatabase.mark_job_failed failed: %s", e, exc_info=True)
 
     def list_jobs(self, status: Optional[str] = None, limit: int = 50) -> List[JobModel]:
         try:
             query = self.client.table("jobs").select("*")
             if status:
                 query = query.eq("status", status)
-            result = query.order("created_at", desc=True).limit(limit).execute()
+            result = query.order(
+                "created_at", desc=True).limit(limit).execute()
             return [JobModel(**row) for row in result.data]
         except Exception as e:
             logging.warning("SupabaseDatabase.list_jobs failed: %s", e)
@@ -1025,8 +1082,10 @@ def extract_campaigns_from_memory(memory: List[Dict[str, Any]]) -> List[Campaign
             continue
         seen.add(normalized.lower())
 
-        raw_status = data.get("campaign_status") or data.get("status") or "completed"
-        status = raw_status if raw_status in {"draft", "active", "paused", "completed", "archived"} else "completed"
+        raw_status = data.get("campaign_status") or data.get(
+            "status") or "completed"
+        status = raw_status if raw_status in {
+            "draft", "active", "paused", "completed", "archived"} else "completed"
 
         campaigns.append(CampaignModel(name=normalized, status=status))
     return campaigns
@@ -1050,7 +1109,8 @@ def extract_leads_from_memory(memory: List[Dict[str, Any]]) -> List[LeadModel]:
             if not (isinstance(item, dict) and "name" in item and "score" in item):
                 continue
             raw_email = item.get("email")
-            email = raw_email.strip().lower() if isinstance(raw_email, str) and raw_email.strip() else None
+            email = raw_email.strip().lower() if isinstance(
+                raw_email, str) and raw_email.strip() else None
             leads.append(LeadModel(
                 full_name=item["name"],
                 company_name=item.get("company") or "Unknown",

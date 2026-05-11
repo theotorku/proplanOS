@@ -4,6 +4,13 @@ import { EMPTY_STATE } from './types';
 import type { OnboardProfile, OnboardState, OnboardStepId } from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+const API_KEY = import.meta.env.VITE_API_KEY ?? '';
+
+function onboardHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const h: Record<string, string> = { ...extra };
+  if (API_KEY) h['X-API-Key'] = API_KEY;
+  return h;
+}
 
 const STATE_KEY = 'proplan_onboard_state';
 const ONBOARDED_KEY = 'proplan_onboarded';
@@ -113,7 +120,7 @@ function StepUrl({ state, setState, next }: StepProps) {
     try {
       const res = await fetch(`${API_BASE_URL}/onboard/scan`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: onboardHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ url: trimmed }),
       });
       if (!res.ok) {
@@ -625,8 +632,8 @@ function StepDone({
             <div className="l">Agents online</div>
           </div>
           <div className="proof-stat">
-            <div className="n"><em>32</em></div>
-            <div className="l">Prospects in first mission</div>
+            <div className="n"><em>{state.goals.length || 1}</em></div>
+            <div className="l">Active goal{state.goals.length !== 1 ? 's' : ''} configured</div>
           </div>
         </div>
 
@@ -693,11 +700,27 @@ function onboardingToBusinessProfile(state: OnboardState) {
     realestate: 'Real estate — brokerages and property managers',
     healthcare: 'Healthcare practices (dental, optometry, clinics)',
   };
+  const vertIcp: Record<string, string> = {
+    roofing:    'Homeowners and property managers needing roofing or home services',
+    realestate: 'Home buyers, sellers, and renters working with local brokerages',
+    healthcare: 'Patients seeking dental, optical, or medical care in the local area',
+  };
+
+  // Build what_we_do: prefer Google Places services description; fall back to
+  // the vertical label (always present) so the field is never empty.
+  const industryLabel = vertIndustry[state.vertical] ?? '';
+  const locationSuffix = p?.location ? ` in ${p.location}` : '';
+  const whatWeDo = p?.services?.trim() || `${industryLabel}${locationSuffix}`.trim();
+
+  // Build icp: combine vertical archetype with location when available.
+  const icpBase = vertIcp[state.vertical] ?? 'Local customers';
+  const icp = p?.location ? `${icpBase}${locationSuffix}` : icpBase;
+
   return {
     company_name: p?.company ?? '',
-    what_we_do: p?.services ?? '',
-    icp: p?.location ? `Customers in ${p.location}` : '',
-    target_industries: vertIndustry[state.vertical] ?? '',
+    what_we_do: whatWeDo,
+    icp,
+    target_industries: industryLabel,
     company_size: '',
     geography: p?.location ?? '',
     lead_signals: state.goals.map(g => goalToSignal[g]).filter(Boolean).join('; '),
@@ -729,7 +752,7 @@ export default function Onboarding({ userId, onComplete }: {
     prefillRan.current = true;
     const token = state.token;
     if (!token) return;
-    fetch(`${API_BASE_URL}/onboard/prefill/${encodeURIComponent(token)}`)
+    fetch(`${API_BASE_URL}/onboard/prefill/${encodeURIComponent(token)}`, { headers: onboardHeaders() })
       .then(r => (r.ok ? r.json() : null))
       .then(data => {
         if (!data) return;
@@ -760,7 +783,7 @@ export default function Onboarding({ userId, onComplete }: {
     try {
       await fetch(`${API_BASE_URL}/profile/${encodeURIComponent(userId)}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: onboardHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ ...profile, user_id: userId }),
       });
     } catch { /* ignore */ }
